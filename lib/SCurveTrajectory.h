@@ -14,11 +14,9 @@
 #define DEBUG_MODE 1 // 1 for debug, zero for actual motor application
 #define VEL_FILTER_COEFFICIENT 0.2 // Alter this for smoothening out filter
 #define TRAJ_MAX_POINTS 8000 // NMaximum size of array calculated based on worst case Delta_T/Ts
-
-
-//Externs
-extern float s_traj_theta[TRAJ_MAX_POINTS]; // Array to hold setpoints
-extern int s_traj_len;                 // Length of setpoint array <--make this uin16_t in stm
+#define ERROR_TOLERANCE 5 // rad verison of 5 degrees for error tolerance
+#define POS_TOL 0.002 // arnd 0.1 degrees
+#define VEL_TOL 0.02 //rad /s
 
 typedef struct
 {
@@ -29,8 +27,14 @@ typedef struct
   float SubStep[6];                    /**< @brief Sub step interval time of acceleration and deceleration phases */
   float SubStepDuration;               /**< @brief Sub step time duration of sequence : acceleration / cruise /
                                                    deceleration */
+  
+  int sign;        // -1 back, 0 idle, +1 forward (current), int8_t
+  int sign_prev;   // last tick’s sign, this will be int8_t
+  float  remainingDistance; // θ_target - θ
+  float  posTol;      // deadband on distance (e.g., 0.002 rad ~0.1°)
+  float  velTol;      // deadband on speed    (e.g., 0.02 rad/s)
   float ElapseTime;                    /**< @brief Elapse time during trajectory movement execution */
-  float SamplingTime;                  /**< @brief Sampling time at which the movement regulation is called
+  int SamplingTime;                  /**< @brief Sampling time at which the movement regulation is called
                                                    (at 1/MEDIUM_FREQUENCY_TASK_RATE) */
   float Jerk;                          /**< @brief Angular jerk, rate of change of the angular acceleration with respect
                                                    to time */
@@ -44,9 +48,9 @@ typedef struct
 
   float A_MAX; // M/s^2 - Max angular acceleration
   float J_MAX; // M/s^3 - Max rate of change of angular acceleration
-
   bool isExecutingTrajectory; // Is the current ESC current executing a movement
-
+  bool isExecutingBrakingTrajecttory; // Is the ESC currently attemping to break
+  int error_count; //number that tracks the amount of times the escs current and targetted position are too different
 } PosCtrlHandle;
 
 /*
@@ -62,6 +66,14 @@ typedef struct {
 } VelocityFilter;
 
 
+//Externs
+extern volatile PosCtrlHandle SCurveTrajectory;
+extern volatile VelocityFilter motorTracker; // Array to hold setpoints
+extern volatile bool newSetpointDetected = false; // Updated in CAN processing
+static unsigned int sample_count = 0; // Helps tell you how many iterations the 1kHz loop has gone through
+extern float positionSetpoint; // This is updated in can_processing
+
+
 //Relevent Function Prototypes
 void STrajectoryInit(PosCtrlHandle *pHandle);
 
@@ -70,6 +82,6 @@ void STrajectoryInit(PosCtrlHandle *pHandle);
 float getAMax(float motorTorque, float motorMomentIntertia);
 float getJMax(float AMax, float timeToAMax) ;
 float getEstimatedTrajectoryTime (float currentAngle, float targetAngle, float angularVelocity);
-float computeTrajectoryParameters(PosCtrlHandle *pHandle, float startingAngle, float movementDuration, float totalAngleMovement);
+void computeTrajectoryParameters(PosCtrlHandle *pHandle, float startingAngle, float movementDuration, float totalAngleMovement);
 float degreesToRad(float positionDegrees);
 float radToDegrees(float positionRad);
