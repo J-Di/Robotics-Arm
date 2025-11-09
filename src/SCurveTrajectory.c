@@ -1,12 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <math.h>
 #include "SCurveTrajectory.h"
 // #include "can_processing.h"
 
-//Declarations
-volatile PosCtrlHandle SCurveTrajectory;
-volatile VelocityFilter motorTracker;
+
+// From externs in h file
+volatile PosCtrlHandle SCurveTrajectory = {0};
+volatile VelocityFilter motorTracker    = {0};
+volatile bool   newSetpointDetected     = false;
+volatile float  positionSetpoint        = 0.0f; // MOVE TO CAN.C
+
+// Private ISR Globals
+static PosCtrlHandle  plan_pending;   
+static volatile uint32_t sample_count = 0;
+static volatile uint8_t replan_request = 0;
+
+// Pointers from planner.c
+extern volatile int plan_ready;
+extern PosCtrlHandle*    plan_active;
+
 const float armSpeed = 0.08727f; // Basically 5 degree per sec, would be externed by CAN_Processing.c
 
 //just a variable for simulations, nothingmore
@@ -90,8 +104,7 @@ void computeTrajectoryParameters(PosCtrlHandle *pHandle, float startingAngle, fl
     float fMinimumStepDuration;
     fMinimumStepDuration = (9.0f * pHandle->SamplingTime);
 
-    /* WARNING: Movement duration value is rounded to the nearest valid value
-       [(DeltaT/9) / SamplingTime]:  shall be an integer value */
+    // Round time to fit timesteps of 1kHz
     pHandle->MovementDuration = (float)((int)(movementDuration / fMinimumStepDuration)) * fMinimumStepDuration;
 
     pHandle->StartingAngle = startingAngle;
@@ -175,86 +188,12 @@ void SCurveTrajectoryStarter(PosCtrlHandle *planner, float targetAngle, float an
   float totalTime = getEstimatedTrajectoryTime(planner->Theta, targetAngle, angularVelocity); // in ms
   float totalAngularMovement = targetAngle - planner->StartingAngle;
   computeTrajectoryParameters(&planner, planner->StartingAngle, totalTime, totalAngularMovement);
+  planner->posTol = POS_TOL;
+  planner->velTol = VEL_TOL;
 
   // Activate Status bools
   planner->isExecutingTrajectory = true; 
 }
-
-/* This is the function that is called at 1kHz by the microcontroller to update the escs position according to the algorithm, in the ISR. IT takes the 
-    S curve planner and the veolicty filter as inputs, and uses it to calculate the enxt ange according to the algorithm, and writes it to the ESC.
-    It Must be a quick one not to take up too much room in the ISR.
- */
-void PosCtrl_ISRStep(void){
-
-    const float Ts = SCurveTrajectory.SamplingTime;
-
-    // Capture current state of the motor
-    updateVelocityFilter(&motorTracker, &SCurveTrajectory);
-    float theta0 = motorTracker.theta_prev; // This is actually the current angle, defined this way for the integration
-    float omega = motorTracker.omega;
-
-    // Update remaining distance and the sign
-    SCurveTrajectory.remainingDistance = positionSetpoint - theta0;
-    int new_sign = sign_with_deadband(SCurveTrajectory.remainingDistance, POS_TOL);
-
-    // Check sign difference
-    if (new_sign != SCurveTrajectory.sign){
-      SCurveTrajectory.sign_prev = SCurveTrajectory.sign;
-      SCurveTrajectory.sign = new_sign;
-
-      //Now Check to see what the new sign is
-      if (new_sign == 0){
-        // We're done with the ramp
-        SCurveTrajectory.isExecutingTrajectory = false;
-      }
-      else{
-        //Direction changed
-        if (omega * (float)new_sign < -VEL_TOL){
-          // If we are moving opposite to the velocity, we must first plan to stop
-          begin_brake_to_zero(&SCurveTrajectory);
-        }
-        else{
-          // Moving in same direciton, replan from where we are right now
-          SCurveTrajectory.Theta        = theta0;
-          SCurveTrajectory.Omega        = omega;
-          SCurveTrajectory.Acceleration = motorTracker.accel;
-          SCurveTrajectoryStarter(&SCurveTrajectory, positionSetpoint, armSpeed);
-          sample_count = 0;
-          SCurveTrajectory.isExecutingTrajectory = true;
-        }
-      }
-    }
-
-    float t = Ts * sample_count;
-    if (t > SCurveTrajectory.MovementDuration) t = SCurveTrajectory.MovementDuration;
-
-    //Select Jerk for this portion of the segment based on t
-    float J = selectJerk(&SCurveTrajectory, t);
-
-    // integrate
-    SCurveTrajectory.Acceleration += J * Ts;
-    SCurveTrajectory.Omega        += SCurveTrajectory.Acceleration * Ts;
-    SCurveTrajectory.Theta        += SCurveTrajectory.Omega * Ts;
-
-    // send follow point (duration = 0)
-    MC_ProgramPositionCommandMotor1(SCurveTrajectory.Theta, 0.0f);
-
-    sample_count++;
-    
-    if (t >= SCurveTrajectory.MovementDuration) {
-        // If this was a BRAKE, you might set a flag and immediately begin_new_profile()
-        // toward the (possibly new) positionSetpoint.
-        SCurveTrajectory.isExecutingTrajectory = false;
-        SCurveTrajectory.Theta = SCurveTrajectory.FinalAngle; // snap final, if applicable
-    }
-
-}
-
-void MC_ProgramPositionCommandMotor1(float position, float time){
-  pathPlanned
-}
-
-
 
 int main (){
 
@@ -298,15 +237,71 @@ float radToDegrees(float positionRad){
 
 }
 
-static inline int sign_with_deadband(float x, float deadband) //change to int8_t
-{
-    if (x >  deadband) return +1;
-    if (x < -deadband) return -1;
-    return 0;
+static inline int8_t sign_db(float x, float band) {
+    return (x > band) - (x < -band);
 }
 
-static inline void begin_brake_to_zero(PosCtrlHandle *p)
+void PosCtrl_ISRStep(void)
 {
-    p->isExecutingTrajectory = true;  // still executing, but as a brake
-}
+    // 0) Acknowledge/pick up newly published plan (planner already swapped pointer)
+    if (plan_ready) {
+        plan_ready = 0;       // acknowledge
+        sample_count = 0;     // restart timing for new plan
+    }
 
+    // Alias the active plan once (avoid repeated volatile derefs)
+    PosCtrlHandle *P = plan_active;
+
+    // 1) Update fast state (cheap filter); encoder read should be inside updateVelocityFilter()
+    //    This keeps omega/accel fresh without heavy math.
+    updateVelocityFilter((VelocityFilter*)&motorTracker, P);
+
+    // 2) Light direction/remaining-distance check → request background replan if needed
+    const float theta  = P->Theta;                 // planner's current pos (or use motorTracker.theta if you store it)
+    const float target = positionSetpoint;         // snapshot once
+    const float rem    = target - theta;           // remaining distance
+    const int8_t want  = sign_db(rem, P->posTol);  // -1 / 0 / +1 with deadband
+
+    if (want != P->sign) {
+        P->sign = want;                // track desired sign for UI/telemetry
+        Planner_RequestReplan();       // just sets a flag; heavy work happens in background
+    }
+
+    // 3) If no active motion, optionally hold last point in FOLLOW mode and exit
+    if (!P->isExecutingTrajectory) {
+        // MC_ProgramPositionCommandMotor1(theta, 0.0f); // optional "hold" in follow mode
+        return;
+    }
+
+    // 4) Jerk select + integrate (strict O(1) hot path)
+    const float Ts = (P->SamplingTime > 0.0f) ? P->SamplingTime : SAMPLING_TIME;
+
+    float t = (float)sample_count * Ts;
+    if (t > P->MovementDuration) t = P->MovementDuration;
+
+    const float J = selectJerk(P, t);
+
+    // Integrate jerk → accel → vel → pos
+    P->Acceleration += J * Ts;
+
+    // Optional physical accel clamp
+    if (P->A_MAX > 0.0f) {
+        if (P->Acceleration >  P->A_MAX) P->Acceleration =  P->A_MAX;
+        if (P->Acceleration < -P->A_MAX) P->Acceleration = -P->A_MAX;
+    }
+
+    P->Omega += P->Acceleration * Ts;
+    P->Theta += P->Omega        * Ts;
+
+    // 5) Emit next point in FOLLOW mode (duration = 0)
+    // MC_ProgramPositionCommandMotor1(P->Theta, 0.0f);
+
+    sample_count++;
+
+    // 6) Completion handling (snap to final; planner can publish next plan if needed)
+    if (t >= P->MovementDuration) {
+        P->isExecutingTrajectory = false;
+        P->Theta = P->FinalAngle;      // ensure exact final position
+        // MC_ProgramPositionCommandMotor1(P->Theta, 0.0f);
+    }
+}

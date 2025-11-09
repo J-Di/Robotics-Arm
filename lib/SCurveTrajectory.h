@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -66,17 +67,20 @@ typedef struct {
 } VelocityFilter;
 
 
-//Externs
-extern volatile PosCtrlHandle SCurveTrajectory;
-extern volatile VelocityFilter motorTracker; // Array to hold setpoints
-extern volatile bool newSetpointDetected = false; // Updated in CAN processing
-static unsigned int sample_count = 0; // Helps tell you how many iterations the 1kHz loop has gone through
-extern float positionSetpoint; // This is updated in can_processing
+// Externs
 
+// SCurveTrajectory.h
+extern volatile PosCtrlHandle SCurveTrajectory;   // active plan (read/write in ISR)
+extern volatile VelocityFilter motorTracker;      // updated in ISR or fast task
+extern volatile bool newSetpointDetected;         // set by CAN task
+extern volatile float positionSetpoint;           // set by CAN task
 
 //Relevent Function Prototypes
 void STrajectoryInit(PosCtrlHandle *pHandle);
-
+void PosCtrl_ISRStep(void);
+void velocityFulterInit(VelocityFilter *vf);
+void updateVelocityFilter(VelocityFilter *vf, PosCtrlHandle *p);
+float selectJerk(const PosCtrlHandle *p, float t_s);
 
 //Helpers
 float getAMax(float motorTorque, float motorMomentIntertia);
