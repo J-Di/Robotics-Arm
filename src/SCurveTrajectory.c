@@ -78,6 +78,9 @@ void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker){
   pHandle-> isExecutingTrajectory = false;
   pHandle->isExecutingBrakingTrajecttory = false;
   velocityFilterInit(motorTracker);
+
+  pHandle->skipAccel = false;
+  pHandle->cruiseN = 0;
   
 }
 
@@ -155,22 +158,32 @@ void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *pHandletemp){ 
 /*
 This section is just to select the correct jerk for the right phase in the ramp according to the 9 step procedure
 */
-float selectJerk(const PosCtrlHandle *pHandle, float time)
+float selectJerk(const PosCtrlHandle *p, float t)
 {
-  //acceleration
-  if (time < pHandle->SubStep[0])      return +pHandle->Jerk;
-  else if (time < pHandle->SubStep[1]) return 0.0f;
-  else if (time < pHandle->SubStep[2]) return -pHandle->Jerk;
+    const float A = p->SubStepDuration;
+    const float tA1 = p->SubStep[0];         // 1A
+    const float tA2 = p->SubStep[1];         // 2A
+    const float tA3 = p->SubStep[2];         // 3A
+    const float tD1 = p->SubStep[3];         // (3 + N)*A
+    const float tD2 = p->SubStep[4];         // (4 + N)*A
+    const float tD3 = p->SubStep[5];         // (5 + N)*A
 
-  //constant angular velocity
-  else if (time < pHandle->SubStep[2] + 3 * pHandle->SubStep[0]) return 0.0f;
+    // Accel lobe (3A)
+    if (t < tA1)      return p->skipAccel ? 0.0f : +p->Jerk;
+    else if (t < tA2) return 0.0f;
+    else if (t < tA3) return p->skipAccel ? 0.0f : -p->Jerk;
 
-  //decceleration
-  else if (time < pHandle->SubStep[3]) return -pHandle->Jerk;
-  else if (time < pHandle->SubStep[4]) return 0.0f;
-  else if (time < pHandle->SubStep[5]) return +pHandle->Jerk;
-  else                return 0.0f;     // done
+    // Cruise plateau (N*A) -> always zero jerk
+    else if (t < tD1) return 0.0f;
+
+    // Decel lobe (3A)
+    else if (t < tD2) return -p->Jerk;
+    else if (t < tD3) return  0.0f;
+    else if (t < p->MovementDuration) return +p->Jerk;
+
+    return 0.0f; // done
 }
+
 
 /*
 This function is designed to populate the array of positions that will be fed to the ESC in order to properly execue the ramp.
@@ -243,37 +256,25 @@ static inline int8_t sign_db(float x, float band) {
 
 void PosCtrl_ISRStep(void)
 {
-    // 0) Acknowledge/pick up newly published plan (planner already swapped pointer)
+    // Acknowledge/pick up newly published plan (planner already swapped pointer)
     if (plan_ready) {
         plan_ready = 0;       // acknowledge
         sample_count = 0;     // restart timing for new plan
     }
 
-    // Alias the active plan once (avoid repeated volatile derefs)
+    // Alias the active plan once to avoid repeated volatile derefs
     PosCtrlHandle *P = plan_active;
 
-    // 1) Update fast state (cheap filter); encoder read should be inside updateVelocityFilter()
-    //    This keeps omega/accel fresh without heavy math.
+    // Update state quickly
     updateVelocityFilter((VelocityFilter*)&motorTracker, P);
 
-    // 2) Light direction/remaining-distance check → request background replan if needed
-    const float theta  = P->Theta;                 // planner's current pos (or use motorTracker.theta if you store it)
-    const float target = positionSetpoint;         // snapshot once
-    const float rem    = target - theta;           // remaining distance
-    const int8_t want  = sign_db(rem, P->posTol);  // -1 / 0 / +1 with deadband
-
-    if (want != P->sign) {
-        P->sign = want;                // track desired sign for UI/telemetry
-        Planner_RequestReplan();       // just sets a flag; heavy work happens in background
-    }
-
-    // 3) If no active motion, optionally hold last point in FOLLOW mode and exit
+    // If no active motion, chill
     if (!P->isExecutingTrajectory) {
         // MC_ProgramPositionCommandMotor1(theta, 0.0f); // optional "hold" in follow mode
         return;
     }
 
-    // 4) Jerk select + integrate (strict O(1) hot path)
+    // Jerk select + integrate (strict O(1) path)
     const float Ts = (P->SamplingTime > 0.0f) ? P->SamplingTime : SAMPLING_TIME;
 
     float t = (float)sample_count * Ts;
@@ -284,7 +285,7 @@ void PosCtrl_ISRStep(void)
     // Integrate jerk → accel → vel → pos
     P->Acceleration += J * Ts;
 
-    // Optional physical accel clamp
+    // physical accel clamp
     if (P->A_MAX > 0.0f) {
         if (P->Acceleration >  P->A_MAX) P->Acceleration =  P->A_MAX;
         if (P->Acceleration < -P->A_MAX) P->Acceleration = -P->A_MAX;
@@ -298,7 +299,7 @@ void PosCtrl_ISRStep(void)
 
     sample_count++;
 
-    // 6) Completion handling (snap to final; planner can publish next plan if needed)
+    // 6) Completion handling
     if (t >= P->MovementDuration) {
         P->isExecutingTrajectory = false;
         P->Theta = P->FinalAngle;      // ensure exact final position

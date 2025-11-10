@@ -21,7 +21,6 @@ void Planner_Init(void);
 void Planner_BackgroundTask(void);
 
 // Lightweight way for the ISR (or others) to request a replan.
-// (e.g., when direction sign flips, or you need to truncate to DECEL)
 void Planner_RequestReplan(void);
 
 // Optional knobs (call anytime from main loop)
