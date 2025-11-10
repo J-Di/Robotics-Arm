@@ -1,17 +1,28 @@
 #include <string.h>
 #include "planner.h"
 #include "SCurveTrajectory.h"
+#include <math.h>         
 
 #define POS_TOL 0.002 // arnd 0.1 degrees
 #define VEL_TOL 0.02 //rad /s
 
+#ifndef __disable_irq
+#define __disable_irq() do{}while(0)
+#endif
+#ifndef __enable_irq
+#define __enable_irq()  do{}while(0)
+#endif
+
+//Function prototypes:
+static void build_ACD(PosCtrlHandle *out, float theta0, float w0, float target, float Ts);
 
 
 // plan_active always points to one of these two.
 static PosCtrlHandle plan_bank[2];
 static uint8_t       bank_idx = 0;         // 0 or 1
-PosCtrlHandle       *plan_active = &plan_bank[0];
-volatile uint8_t     plan_ready  = 0;      // ISR will clear after it acknowledges
+// Definition matches header: volatile pointer
+volatile PosCtrlHandle *  plan_active = &plan_bank[0];
+volatile uint8_t         plan_ready  = 0; // ISR will clear this one when it acknowledges
 
 // Internal flags
 static volatile uint8_t replan_request = 0;   // set by Planner_RequestReplan()
@@ -25,50 +36,48 @@ extern volatile VelocityFilter motorTracker;      // provides ω, accel estimate
 extern volatile float positionSetpoint;           // latest target angle [rad]
 extern volatile bool  newSetpointDetected;        // set by CAN handler
 
-
-
 // helper function
 static inline int8_t sign_db(float x, float band) {
     return (x > band) - (x < -band);
 }
 
-// Build a complete S-curve plan from the snapshot (θ0, ω0) to target.
-static void build_plan(PosCtrlHandle *out,
-                       float theta0, float omega0, float accel0,
-                       float target, float Ts)
-{
-    memset(out, 0, sizeof(*out));
+// // Build a complete S-curve plan from the snapshot (θ0, ω0) to target.
+// static void build_plan(PosCtrlHandle *out,
+//                        float theta0, float omega0, float accel0,
+//                        float target, float Ts)
+// {
+//     memset(out, 0, sizeof(*out));
 
-    out->SamplingTime       = Ts;
-    out->StartingAngle      = theta0;
-    out->FinalAngle         = target;
-    out->AngleStep          = target - theta0;
+//     out->SamplingTime       = Ts;
+//     out->StartingAngle      = theta0;
+//     out->FinalAngle         = target;
+//     out->AngleStep          = target - theta0;
 
-    // Choose a duration. Simple first pass: use your estimator (ms) then convert to s.
-    const float T_ms = getEstimatedTrajectoryTime(theta0, target, omega_cruise);
-    const float T_s  = (T_ms <= 1.0f) ? 0.009f : (T_ms * 0.001f); // minimum 9*Ts guard
+//     // Choose a duration. Simple first pass: use your estimator (ms) then convert to s.
+//     const float T_ms = getEstimatedTrajectoryTime(theta0, target, omega_cruise);
+//     const float T_s  = (T_ms <= 1.0f) ? 0.009f : (T_ms * 0.001f); // minimum 9*Ts guard
 
-    // Compute 9-segment parameters
-    computeTrajectoryParameters(out, theta0, T_s, out->AngleStep);
+//     // Compute 9-segment parameters
+//     computeTrajectoryParameters(out, theta0, T_s, out->AngleStep);
 
-    // Seed current state from snapshot
-    out->Theta        = theta0;
-    out->Omega        = omega0;
-    out->Acceleration = accel0;
+//     // Seed current state from snapshot
+//     out->Theta        = theta0;
+//     out->Omega        = omega0;
+//     out->Acceleration = accel0;
 
-    // Physical/comfort limits (optional: clamp computed jerk/accel to these)
-    out->A_MAX  = A_max;
-    out->J_MAX  = J_max;
+//     // Physical/comfort limits (optional: clamp computed jerk/accel to these)
+//     out->A_MAX  = A_max;
+//     out->J_MAX  = J_max;
 
-    // Guidance tolerances and sign
-    out->posTol = (out->posTol > 0.0f) ? out->posTol : 0.002f;  // ~0.11°
-    out->velTol = (out->velTol > 0.0f) ? out->velTol : 0.02f;   // rad/s
-    out->remainingDistance = out->AngleStep;
-    out->sign     = sign_db(out->remainingDistance, out->posTol);
-    out->sign_prev= out->sign;
+//     // Guidance tolerances and sign
+//     out->posTol = (out->posTol > 0.0f) ? out->posTol : 0.002f;  // ~0.11°
+//     out->velTol = (out->velTol > 0.0f) ? out->velTol : 0.02f;   // rad/s
+//     out->remainingDistance = out->AngleStep;
+//     out->sign     = sign_db(out->remainingDistance, out->posTol);
+//     out->sign_prev= out->sign;
 
-    out->isExecutingTrajectory = true;
-}
+//     out->isExecutingTrajectory = true;
+// }
 
 // Publish plan_pending into inactive bank and switch plan_active atomically.
 // ISR does not swap pointers; it only looks at plan_ready to reset its timing.
@@ -88,18 +97,16 @@ static void publish_plan(const PosCtrlHandle *pending)
 void Planner_Init(void)
 {
     // Initialize the two banks to a benign hold state
+    // Planner_Init()
     memset(&plan_bank[0], 0, sizeof(plan_bank));
-    plan_bank[0].SamplingTime  = (SCurveTrajectory.SamplingTime > 0.0f) ? SCurveTrajectory.SamplingTime : SAMPLING_TIME;
-    plan_bank[0].FinalAngle    = plan_bank[0].StartingAngle;
-    plan_bank[0].posTol        = 0.002f;
-    plan_bank[0].velTol        = 0.02f;
+    plan_bank[0].SamplingTime = (SCurveTrajectory.SamplingTime>0.0f)?SCurveTrajectory.SamplingTime: SAMPLING_TIME;
+    plan_bank[0].posTol = 0.002f;
+    plan_bank[0].velTol = 0.02f;
     plan_bank[0].isExecutingTrajectory = false;
-
     plan_bank[1] = plan_bank[0];
-    plan_active  = &plan_bank[0];
     bank_idx     = 0;
+    plan_active  = &plan_bank[0];
     plan_ready   = 0;
-    replan_request = 0;
 
     // Default knobs (can be overridden later)
     omega_cruise = (SCurveTrajectory.CruiseSpeed > 0.0f) ? SCurveTrajectory.CruiseSpeed : 0.08727f;
@@ -142,18 +149,13 @@ void Planner_BackgroundTask(void)
     const float Ts     = (SCurveTrajectory.SamplingTime > 0.0f) ? SCurveTrajectory.SamplingTime : SAMPLING_TIME;
     const float theta0 = SCurveTrajectory.Theta;     // latest angle
     const float omega0 = motorTracker.omega;         // filtered velocity
-    const float accel0 = motorTracker.accel;         // filtered accel
     const float target = positionSetpoint;
-
-    float rem = target - theta0;
-    int8_t sgn = (rem > plan_active->posTol) - (rem < -plan_active->posTol);
-
 
     // Decide strategy (simple version): always re-build a full plan from current state to target.
     // If you want ACCEL/CRUISE/DECEL truncation or BRAKE-then-relaunch for opposite direction,
     // compute that logic here and adjust the duration you pass into computeTrajectoryParameters().
     PosCtrlHandle pending;
-    build_plan(&pending, theta0, omega0, accel0, target, Ts);
+    build_ACD(&pending, theta0, omega0, target, Ts);
 
     // Atomically publish for the ISR
     publish_plan(&pending);
@@ -269,7 +271,7 @@ static float preview_distance(float w0, float Jabs, float A, float Ts,
 }
 
 
-static void build_ACD(PosCtrlHandle *out, float theta0, float w0, float target, float Ts)
+void build_ACD(PosCtrlHandle *out, float theta0, float w0, float target, float Ts)
 {
     const float delta = target - theta0;
     const float sgn   = (delta >= 0.0f) ? +1.0f : -1.0f;

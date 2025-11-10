@@ -13,18 +13,13 @@ volatile bool   newSetpointDetected     = false;
 volatile float  positionSetpoint        = 0.0f; // MOVE TO CAN.C
 
 // Private ISR Globals
-static PosCtrlHandle  plan_pending;   
 static volatile uint32_t sample_count = 0;
-static volatile uint8_t replan_request = 0;
 
 // Pointers from planner.c
-extern volatile int plan_ready;
+extern volatile uint8_t plan_ready;
 extern PosCtrlHandle*    plan_active;
 
 const float armSpeed = 0.08727f; // Basically 5 degree per sec, would be externed by CAN_Processing.c
-
-//just a variable for simulations, nothingmore
-[]float pathPlanned;
 
 /*
 Returns the maximum angular acceleration based on physical motor parameters
@@ -61,7 +56,7 @@ void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker){
   pHandle->remainingDistance = 0; // θ_target - θ
 
   pHandle->SamplingTime = SAMPLING_TIME; // 0.001f
-  pHandle->SubStepDuration = 0;
+  pHandle->SubStepDuration = pHandle->SamplingTime;
 
   pHandle->Jerk = 0.0f;
   pHandle->CruiseSpeed = 0.0f;
@@ -76,7 +71,6 @@ void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker){
   pHandle->A_MAX = getAMax(MOTOR_TORQUE, MOTOR_MOMENT); // M/s^2 - Max angular acceleration
   pHandle-> J_MAX = getJMax(pHandle->A_MAX, 10);
   pHandle-> isExecutingTrajectory = false;
-  pHandle->isExecutingBrakingTrajecttory = false;
   velocityFilterInit(motorTracker);
 
   pHandle->skipAccel = false;
@@ -95,7 +89,7 @@ void velocityFilterInit(VelocityFilter *pHandle){
 
 /*
 This function calculates the required parameters and saves them to the trajectory struct, which 
-are used by the algorythm to produce the S curve
+are used by the algorythm to poduce the S curver
   * @param  pHandle handler of the current instance of the Position Control component.
   * @param  startingAngle Current mechanical position.
   * @param  angleStep Target mechanical position.
@@ -200,27 +194,13 @@ void SCurveTrajectoryStarter(PosCtrlHandle *planner, float targetAngle, float an
   planner->error_count = 0;
   float totalTime = getEstimatedTrajectoryTime(planner->Theta, targetAngle, angularVelocity); // in ms
   float totalAngularMovement = targetAngle - planner->StartingAngle;
-  computeTrajectoryParameters(&planner, planner->StartingAngle, totalTime, totalAngularMovement);
+  computeTrajectoryParameters(planner, planner->StartingAngle, totalTime*0.001f, totalAngularMovement);
   planner->posTol = POS_TOL;
   planner->velTol = VEL_TOL;
 
   // Activate Status bools
   planner->isExecutingTrajectory = true; 
 }
-
-int main (){
-
-  // Put this stuff in the init section
-  STrajectoryInit(&SCurveTrajectory, &motorTracker);
-
-  // So what needs to happen is a global var needs to be declared in can_processing.c that is called setpoint, and pretty much anotehr boolean in this file will be 
-  // like isNewSetpoint and pretty much it compares the setpoint on each 1khz loop to the current setpoint, and if its different then isNewSetpoint must be set to tru,e which casues 
-  // it to reinitioalize the logic and ramp stuff. Otherwise, if a rampp is currently taking place, it just does the math. If it is not, then it would also need to set 
-  // the things and run 
-
-}
-
-
 /*
 This function computes the estimated time it will take to execute the desired motion
 
@@ -265,6 +245,7 @@ void PosCtrl_ISRStep(void)
     // Alias the active plan once to avoid repeated volatile derefs
     PosCtrlHandle *P = plan_active;
 
+
     // Update state quickly
     updateVelocityFilter((VelocityFilter*)&motorTracker, P);
 
@@ -273,6 +254,14 @@ void PosCtrl_ISRStep(void)
         // MC_ProgramPositionCommandMotor1(theta, 0.0f); // optional "hold" in follow mode
         return;
     }
+
+    // Reject malformed plans (defensive)
+  if (!(P->MovementDuration > 0.0f) ||
+      !(P->SubStepDuration > 0.0f) ||
+      !isfinite(P->Jerk)) {
+      P->isExecutingTrajectory = false;
+      return;
+  }
 
     // Jerk select + integrate (strict O(1) path)
     const float Ts = (P->SamplingTime > 0.0f) ? P->SamplingTime : SAMPLING_TIME;

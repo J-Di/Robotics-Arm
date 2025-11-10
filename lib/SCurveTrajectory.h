@@ -8,6 +8,9 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
+#ifndef S_CURVE_TRAJECTORY_H
+#define S_CURVE_TRAJECTORY_H
+
 //These are for the elbow motor, and will need to make a helper function to extract for rover depending on esc
 #define MOTOR_TORQUE  405e-3f  // Nm
 #define MOTOR_MOMENT 13.31e-6f // kg·m²
@@ -15,7 +18,7 @@
 #define DEBUG_MODE 1 // 1 for debug, zero for actual motor application
 #define VEL_FILTER_COEFFICIENT 0.2 // Alter this for smoothening out filter
 #define TRAJ_MAX_POINTS 8000 // NMaximum size of array calculated based on worst case Delta_T/Ts
-#define ERROR_TOLERANCE 5 // rad verison of 5 degrees for error tolerance
+#define ERROR_TOLERANCE 5 // Missed steps tolerance
 #define POS_TOL 0.002 // arnd 0.1 degrees
 #define VEL_TOL 0.02 //rad /s
 
@@ -35,7 +38,7 @@ typedef struct
   float  posTol;      // deadband on distance (e.g., 0.002 rad ~0.1°)
   float  velTol;      // deadband on speed    (e.g., 0.02 rad/s)
   float ElapseTime;                    /**< @brief Elapse time during trajectory movement execution */
-  int SamplingTime;                  /**< @brief Sampling time at which the movement regulation is called
+  float SamplingTime;                  /**< @brief Sampling time at which the movement regulation is called
                                                    (at 1/MEDIUM_FREQUENCY_TASK_RATE) */
   float Jerk;                          /**< @brief Angular jerk, rate of change of the angular acceleration with respect
                                                    to time */
@@ -50,8 +53,11 @@ typedef struct
   float A_MAX; // M/s^2 - Max angular acceleration
   float J_MAX; // M/s^3 - Max rate of change of angular acceleration
   bool isExecutingTrajectory; // Is the current ESC current executing a movement
-  bool isExecutingBrakingTrajecttory; // Is the ESC currently attemping to break
   int error_count; //number that tracks the amount of times the escs current and targetted position are too different
+
+  bool skipAccel; // used to skip acceleration phase in case already cruising upon new command
+  int cruiseN; //
+  
 } PosCtrlHandle;
 
 /*
@@ -76,10 +82,10 @@ extern volatile bool newSetpointDetected;         // set by CAN task
 extern volatile float positionSetpoint;           // set by CAN task
 
 //Relevent Function Prototypes
-void STrajectoryInit(PosCtrlHandle *pHandle);
+void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker);
 void PosCtrl_ISRStep(void);
-void velocityFulterInit(VelocityFilter *vf);
-void updateVelocityFilter(VelocityFilter *vf, PosCtrlHandle *p);
+void velocityFilterInit(VelocityFilter *vf);
+void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *pHandletemp);
 float selectJerk(const PosCtrlHandle *p, float t_s);
 
 //Helpers
@@ -89,3 +95,6 @@ float getEstimatedTrajectoryTime (float currentAngle, float targetAngle, float a
 void computeTrajectoryParameters(PosCtrlHandle *pHandle, float startingAngle, float movementDuration, float totalAngleMovement);
 float degreesToRad(float positionDegrees);
 float radToDegrees(float positionRad);
+float getCurrentPosition(PosCtrlHandle *pHandle);
+
+#endif /* S_CURVE_TRAJECTORY_H */
