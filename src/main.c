@@ -30,6 +30,8 @@
 #define SIM_TOTAL_S     (6.0f)            // total simulation time
 #define LOG_FILENAME    "sim_log.csv"
 
+
+
 // Scenario timeline (seconds) and targets (radians).
 // Feel free to tweak these or add more events.
 typedef struct { float t_s; float target_rad; } CmdEvent;
@@ -77,7 +79,6 @@ int main(void)
     // 1) Initialize trajectory state + filter + planner
     STrajectoryInit((PosCtrlHandle*)&SCurveTrajectory, (VelocityFilter*)&motorTracker);
     Planner_Init();
-    Planner_Init();
 
     // 2) Open CSV log
     FILE *log = fopen(LOG_FILENAME, "w");
@@ -85,7 +86,7 @@ int main(void)
         perror("fopen");
         return 1;
     }
-    fprintf(log, "t_s,target_rad,theta,omega,accel,isExec,cruiseN,skipAccel\n");
+    fprintf(log, "t_s,target_rad,theta,omega,accel,jerk,isExec,cruiseN,skipAccel\n");
 
     // 3) Prime with first command (if any event at t=0)
     for (size_t i = 0; i < sizeof(kEvents)/sizeof(kEvents[0]); ++i) {
@@ -105,6 +106,7 @@ int main(void)
         event_ticks[i] = sec_to_ticks(kEvents[i].t_s);
     }
 
+
     for (uint32_t tick = 0; tick <= total_ticks; ++tick) {
         float t_s = tick * SIM_DT_S;
 
@@ -123,12 +125,13 @@ int main(void)
 
         // d) Log current state to CSV (acts like MC_ProgramPositionCommandMotor1)
         volatile PosCtrlHandle *P = plan_active; // snapshot pointer once
-        fprintf(log, "%.6f,%.7f,%.7f,%.7f,%.7f,%d,%d,%d\n",
+        fprintf(log, "%.6f,%.7f,%.7f,%.7f,%.7f,%.7f,%d,%d,%d\n",
                 (double)t_s,
                 (double)positionSetpoint,
                 (double)P->Theta,
                 (double)motorTracker.omega,
                 (double)motorTracker.accel,
+                P->Jerk,
                 P->isExecutingTrajectory ? 1 : 0,
                 P->cruiseN,
                 P->skipAccel ? 1 : 0);

@@ -271,16 +271,35 @@ static float preview_distance(float w0, float Jabs, float A, float Ts,
 }
 
 
+
 void build_ACD(PosCtrlHandle *out, float theta0, float w0, float target, float Ts)
 {
-    const float delta = target - theta0;
+    // Deterministic baseline init
+    memset(out, 0, sizeof(*out));
+    out->SamplingTime = (Ts > 0.0f) ? Ts : SAMPLING_TIME;
+    out->posTol = POS_TOL;
+    out->velTol = VEL_TOL;
+    out->StartingAngle = theta0;
+    out->FinalAngle    = target;
+    const float delta  = target - theta0;
+    out->AngleStep     = delta;
+
+    // If already at target and basically stopped, do not generate a plan
+    if (fabsf(delta) <= out->posTol && fabsf(w0) <= out->velTol) {
+        out->isExecutingTrajectory = false;
+        out->MovementDuration = 0.0f;
+        out->SubStepDuration  = out->SamplingTime;
+        return;
+    }
+
     const float sgn   = (delta >= 0.0f) ? +1.0f : -1.0f;
 
     // 1) Choose A and J
-    float A  = choose_A(A_max, J_max, Ts);
+    float A  = choose_A(A_max, J_max, out->SamplingTime);
     float J  = sgn * J_max;
 
     // 2) Decide initial macro kind from current state
+// 2) Decide initial macro kind from current state
     PlanKind kind = decide_kind(delta, w0, out->posTol, out->velTol);
 
     // 3) If opposite direction: publish BRAKE plan now (3A decel) and return; planner can chain the next plan after completion.

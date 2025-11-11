@@ -17,7 +17,7 @@ static volatile uint32_t sample_count = 0;
 
 // Pointers from planner.c
 extern volatile uint8_t plan_ready;
-extern PosCtrlHandle*    plan_active;
+extern volatile PosCtrlHandle* plan_active;
 
 const float armSpeed = 0.08727f; // Basically 5 degree per sec, would be externed by CAN_Processing.c
 
@@ -152,9 +152,27 @@ void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *pHandletemp){ 
 /*
 This section is just to select the correct jerk for the right phase in the ramp according to the 9 step procedure
 */
+
 float selectJerk(const PosCtrlHandle *p, float t)
 {
+    // Input checks
+    if (!p || !p->isExecutingTrajectory) return 0.0f;
+    if (!isfinite(t) || t < 0.0f) return 0.0f;
+
+    const float T = (p->MovementDuration > 0.0f) ? p->MovementDuration : 0.0f;
+    if (T <= 0.0f) return 0.0f;
+    if (t >= T) return 0.0f;
+
     const float A = p->SubStepDuration;
+    if (!(A > 0.0f) || !isfinite(A)) return 0.0f;
+
+    // Clamp jerk magnitude to a sane bound
+    float Jbase = p->Jerk;
+    if (!isfinite(Jbase)) Jbase = 0.0f;
+    float Jcap = 4.0f * ((p->J_MAX > 0.0f) ? p->J_MAX : fabsf(Jbase));
+    if (Jbase >  Jcap) Jbase =  Jcap;
+    if (Jbase < -Jcap) Jbase = -Jcap;
+
     const float tA1 = p->SubStep[0];         // 1A
     const float tA2 = p->SubStep[1];         // 2A
     const float tA3 = p->SubStep[2];         // 3A
@@ -163,20 +181,21 @@ float selectJerk(const PosCtrlHandle *p, float t)
     const float tD3 = p->SubStep[5];         // (5 + N)*A
 
     // Accel lobe (3A)
-    if (t < tA1)      return p->skipAccel ? 0.0f : +p->Jerk;
+    if (t < tA1)      return p->skipAccel ? 0.0f : +Jbase;
     else if (t < tA2) return 0.0f;
-    else if (t < tA3) return p->skipAccel ? 0.0f : -p->Jerk;
+    else if (t < tA3) return p->skipAccel ? 0.0f : -Jbase;
 
     // Cruise plateau (N*A) -> always zero jerk
     else if (t < tD1) return 0.0f;
 
     // Decel lobe (3A)
-    else if (t < tD2) return -p->Jerk;
+    else if (t < tD2) return -Jbase;
     else if (t < tD3) return  0.0f;
-    else if (t < p->MovementDuration) return +p->Jerk;
+    else if (t < p->MovementDuration) return +Jbase;
 
     return 0.0f; // done
 }
+
 
 
 /*
