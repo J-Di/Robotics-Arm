@@ -1,49 +1,44 @@
-# === Project Settings =========================================================
-TARGET := sim
+# Minimal Makefile: src/*.c, headers in lib/, output in build/
+APP        := app
+SRC_DIR    := src
+INC_DIR    := lib
+BUILD_DIR  := build
+OBJ_DIR    := $(BUILD_DIR)/obj
 
-# Directory layout
-SRCDIR := src
-INCDIR := lib
-OBJDIR := build
+CC         := gcc
+STD        := -std=c17
+WARN       := -Wall -Wextra -Wpedantic
+INCLUDES   := -I$(INC_DIR)
 
-# Automatically find all .c files in /src
-SRC := $(wildcard $(SRCDIR)/*.c)
-OBJ := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRC))
+# Find all C sources (nested dirs too)
+SRCS       := $(shell find $(SRC_DIR) -type f -name '*.c')
+OBJS       := $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 
-# Compiler / flags
-CC      := gcc
-CFLAGS  := -std=c11 -O2 -Wall -Wextra -I$(INCDIR)
-LDFLAGS := -lm
+# Flags
+CFLAGS_RELEASE := $(STD) $(WARN) $(INCLUDES) -O2 -g
+CFLAGS_DEBUG   := $(STD) $(WARN) $(INCLUDES) -O0 -g3
+LDFLAGS        :=
+LDLIBS         := -lm       # <-- math library for floorf/roundf/llroundf
 
-# === Rules ====================================================================
+.PHONY: all debug clean run
 
-.PHONY: all clean run
+all: CFLAGS := $(CFLAGS_RELEASE)
+all: $(BUILD_DIR)/$(APP)
 
-all: $(TARGET)
+debug: CFLAGS := $(CFLAGS_DEBUG)
+debug: $(BUILD_DIR)/$(APP)
 
-# Link
-$(TARGET): $(OBJ)
-	@echo "  [LINK]  $@"
-	$(CC) $(OBJ) -o $@ $(LDFLAGS)
+$(BUILD_DIR)/$(APP): $(OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(OBJS) -o $@ $(LDFLAGS) $(LDLIBS)
 
-# Compile each .c file
-$(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
-	@echo "  [CC]    $<"
+# Build objects mirroring src/ tree
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Ensure build folder exists
-$(OBJDIR):
-	@mkdir -p $(OBJDIR)
-
-# Clean build outputs
-clean:
-	@echo "  [CLEAN]"
-	rm -rf $(OBJDIR) $(TARGET)
-
-# Run the simulation (after build)
 run: all
-	./$(TARGET)
+	./$(BUILD_DIR)/$(APP)
 
-# Convenience
-print-%:
-	@echo '$*=$($*)'
+clean:
+	rm -rf $(BUILD_DIR)

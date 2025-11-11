@@ -1,27 +1,6 @@
 {
   "version": "2.0.0",
   "tasks": [
-    {
-      "label": "Build (gcc)",
-      "type": "shell",
-      "command": "mkdir",
-      "args": [ "-Force", "build" ],
-      "problemMatcher": []
-    },
-    {
-      "label": "Compile",
-      "type": "shell",
-      "dependsOn": "Build (gcc)",
-      "command": "C:/msys64/ucrt64/bin/gcc.exe",
-      "args": [
-        "-g", "-O0", "-Wall", "-Wextra", "-std=c17",
-        "-I", "lib",
-        "${workspaceFolder}/src/*.c",
-        "-o", "${workspaceFolder}/build/app.exe"
-      ],
-      "options": { "shell": { "executable": "powershell.exe" } },
-      "group": { "kind": "build", "isDefault": true },
-      "problemMatcher": "$gcc"
-    }
+    { "label": "C: build (debug)", "type": "shell", "command": "make debug", "group": "build", "problemMatcher": ["$gcc"] }
   ]
 }
