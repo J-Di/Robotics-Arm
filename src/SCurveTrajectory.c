@@ -205,7 +205,6 @@ This function is designed to populate the array of positions that will be fed to
 void SCurveTrajectoryStarter(PosCtrlHandle *planner, float targetAngle, float angularVelocity){
 
   // Initialize required parameters
-  float t = 0.0f;
   planner->error_count = 0;
   float totalTime = getEstimatedTrajectoryTime(planner->Theta, targetAngle, angularVelocity); // in ms
   float totalAngularMovement = targetAngle - planner->StartingAngle;

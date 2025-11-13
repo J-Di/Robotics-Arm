@@ -27,7 +27,7 @@
 
 // --- Simulation knobs ---------------------------------------------------------
 #define SIM_DT_S        (SAMPLING_TIME)   // 1 kHz tick (from your header)
-#define SIM_TOTAL_S     (6.0f)            // total simulation time
+#define SIM_TOTAL_S     (8.f)            // total simulation time
 #define LOG_FILENAME    "sim_log.csv"
 
 
