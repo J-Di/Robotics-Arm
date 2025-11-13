@@ -68,8 +68,9 @@ void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker){
 
   pHandle->error_count = 0;
   
-  pHandle->A_MAX = getAMax(MOTOR_TORQUE, MOTOR_MOMENT); // M/s^2 - Max angular acceleration
-  pHandle-> J_MAX = getJMax(pHandle->A_MAX, 10);
+  // pHandle->A_MAX = getAMax(MOTOR_TORQUE, MOTOR_MOMENT); // M/s^2 - Max angular acceleration
+  pHandle->A_MAX = MAX_A;
+  pHandle-> J_MAX = getJMax(pHandle->A_MAX, 1);
   pHandle-> isExecutingTrajectory = false;
   velocityFilterInit(motorTracker);
 
@@ -156,23 +157,18 @@ This section is just to select the correct jerk for the right phase in the ramp 
 float selectJerk(const PosCtrlHandle *p, float t)
 {
     // Input checks
-    if (!p || !p->isExecutingTrajectory) return 0.0f;
-    if (!isfinite(t) || t < 0.0f) return 0.0f;
-
+    if (!p->isExecutingTrajectory) return 0.0f;
+  
     const float T = (p->MovementDuration > 0.0f) ? p->MovementDuration : 0.0f;
     if (T <= 0.0f) return 0.0f;
     if (t >= T) return 0.0f;
 
     const float A = p->SubStepDuration;
-    if (!(A > 0.0f) || !isfinite(A)) return 0.0f;
+    if (!(A > 0.0f)) return 0.0f;
 
     // Clamp jerk magnitude to a sane bound
     float Jbase = p->Jerk;
-    if (!isfinite(Jbase)) Jbase = 0.0f;
-    float Jcap = 4.0f * ((p->J_MAX > 0.0f) ? p->J_MAX : fabsf(Jbase));
-    if (Jbase >  Jcap) Jbase =  Jcap;
-    if (Jbase < -Jcap) Jbase = -Jcap;
-
+   
     const float tA1 = p->SubStep[0];         // 1A
     const float tA2 = p->SubStep[1];         // 2A
     const float tA3 = p->SubStep[2];         // 3A

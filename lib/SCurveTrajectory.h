@@ -13,7 +13,8 @@
 
 //These are for the elbow motor, and will need to make a helper function to extract for rover depending on esc
 #define MOTOR_TORQUE  405e-3f  // Nm
-#define MOTOR_MOMENT 13.31e-6f // kg·m²
+#define MOTOR_MOMENT 8100.0f // 13.31e-6f  kg·m²
+#define MAX_A 1875 //Estimated value, must tune this
 #define SAMPLING_TIME 0.001 // in s, 1kHz
 #define DEBUG_MODE 1 // 1 for debug, zero for actual motor application
 #define VEL_FILTER_COEFFICIENT 0.2 // Alter this for smoothening out filter
