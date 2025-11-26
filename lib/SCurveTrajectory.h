@@ -44,6 +44,7 @@ typedef struct {
     float_t accel_prev;
     float_t alpha_coeff;    // filter coefficient (0..1)
     float_t Ts;             // sample period [s]
+    float_t jerk;           // This is mostly included for testing purposes
 } VelocityFilter;
 
 // Var declared in this file
@@ -58,7 +59,10 @@ extern volatile float positionSetpoint;           // set by CAN_processing.c
 extern volatile bool newSetpointDetected;         // set by CAN_processing.c
 
 //Relevent Function Prototypes
-
+float_t getJerk(VelocityFilter* pHandle);
+float_t getAngularAccel(VelocityFilter* pHandle);
+float_t getAngularVelocity(VelocityFilter* pHandle);
+float_t getCurrentPosition(float_t position); // Special Case as might wanna return encoder adn degrees instead of this radians one
 
 //Helpers
 float degreesToRad(float positionDegrees);
