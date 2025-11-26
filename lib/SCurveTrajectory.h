@@ -12,87 +12,52 @@
 #define S_CURVE_TRAJECTORY_H
 
 //These are for the elbow motor, and will need to make a helper function to extract for rover depending on esc
-#define MOTOR_TORQUE  405e-3f  // Nm
-#define MOTOR_MOMENT 13.31e-6f // kg·m²
 #define SAMPLING_TIME 0.001 // in s, 1kHz
-#define DEBUG_MODE 1 // 1 for debug, zero for actual motor application
 #define VEL_FILTER_COEFFICIENT 0.2 // Alter this for smoothening out filter
-#define TRAJ_MAX_POINTS 8000 // NMaximum size of array calculated based on worst case Delta_T/Ts
-#define ERROR_TOLERANCE 5 // Missed steps tolerance
-#define POS_TOL 0.002 // arnd 0.1 degrees
-#define VEL_TOL 0.02 //rad /s
 
 typedef struct
 {
-  float MovementDuration;              /**< @brief Total duration of the programmed movement */
-  float StartingAngle;                 /**< @brief Current mechanical position */
-  float FinalAngle;                    /**< @brief Target mechanical position including start position */
-  float AngleStep;                     /**< @brief Target mechanical position */
-  float SubStep[6];                    /**< @brief Sub step interval time of acceleration and deceleration phases */
-  float SubStepDuration;               /**< @brief Sub step time duration of sequence : acceleration / cruise /
-                                                   deceleration */
-  
-  int sign;        // -1 back, 0 idle, +1 forward (current), int8_t
-  int sign_prev;   // last tick’s sign, this will be int8_t
-  float  remainingDistance; // θ_target - θ
-  float  posTol;      // deadband on distance (e.g., 0.002 rad ~0.1°)
-  float  velTol;      // deadband on speed    (e.g., 0.02 rad/s)
-  float ElapseTime;                    /**< @brief Elapse time during trajectory movement execution */
-  float SamplingTime;                  /**< @brief Sampling time at which the movement regulation is called
-                                                   (at 1/MEDIUM_FREQUENCY_TASK_RATE) */
-  float Jerk;                          /**< @brief Angular jerk, rate of change of the angular acceleration with respect
-                                                   to time */
-  float CruiseSpeed;                   /**< @brief Angular velocity during the time interval after acceleration and
-                                                   before deceleration */
-  float Acceleration;                  /**< @brief Angular acceleration in rad/s^2 */
-  float Omega;                         /**< @brief Estimated angular speed in rad/s */
-  float OmegaPrev;                     /**< @brief Previous estimated angular speed of frame (N-1) */
-  float Theta;                         /**< @brief Current angular position */
-  float ThetaPrev;                     /**< @brief Angular position of frame (N-1) */
+  float_t a_max;
+  float_t v_max;
+  float_t j_max;
+  float_t jerk;
 
-  float A_MAX; // M/s^2 - Max angular acceleration
-  float J_MAX; // M/s^3 - Max rate of change of angular acceleration
-  bool isExecutingTrajectory; // Is the current ESC current executing a movement
-  int error_count; //number that tracks the amount of times the escs current and targetted position are too different
-
-  bool skipAccel; // used to skip acceleration phase in case already cruising upon new command
-  int cruiseN; //
-  
+  float_t profileSwitchingTimes[8]; // Array of times where profile state switches [t0,t1,t2,t3,t4,t5,t6,t7]
+  uint8_t profilePhase; //Current Phase of the profile: 1,2,3,4,5,6,7 (1-3: Accel) | 4: Constant V | (5-7: Decel)
+     
+  bool isTrajExecuting; // A boolean to indicate if a current profile is currently being executed 
+  bool isWandering; // A boolean to indicate if a profile must stop, and then move backwards to hit a certain setpoint
 } PosCtrlHandle;
 
 /*
 This struct is to be used as a velocity filter that holds the acual values of the motor state, retrieved and updated through the encoder itself
 */
 typedef struct {
-    float theta_prev;     // last angle reading [rad]
-    float omega;          // filtered velocity [rad/s]
-    float omega_prev;
-    float accel;
-    float alpha_coeff;    // filter coefficient (0..1)
-    float Ts;             // sample period [s]
+    float_t theta;
+    float_t theta_prev;     // last angle reading [rad]
+    float_t omega;          // filtered velocity [rad/s]
+    float_t omega_prev;
+    float_t accel;
+    float_t accel_prev;
+    float_t alpha_coeff;    // filter coefficient (0..1)
+    float_t Ts;             // sample period [s]
 } VelocityFilter;
 
+// Var declared in this file
 
-// Externs
+// Externs Vars
+extern volatile PosCtrlHandle paths_planned[2];   // path plans from planner.c
+extern volatile uint8_t active_plan;              // active plan by planner.c
+extern volatile uint8_t inactive_plan;            // inactive plan by planner.c
+extern volatile VelocityFilter motorTracker;      // motor state tracker from planner.c
 
-// SCurveTrajectory.h
-extern volatile PosCtrlHandle SCurveTrajectory;   // active plan (read/write in ISR)
-extern volatile VelocityFilter motorTracker;      // updated in ISR or fast task
-extern volatile bool newSetpointDetected;         // set by CAN task
-extern volatile float positionSetpoint;           // set by CAN task
+extern volatile float positionSetpoint;           // set by CAN_processing.c
+extern volatile bool newSetpointDetected;         // set by CAN_processing.c
 
 //Relevent Function Prototypes
-void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker);
-void PosCtrl_ISRStep(void);
-void velocityFilterInit(VelocityFilter *vf);
-void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *pHandletemp);
-float selectJerk(const PosCtrlHandle *p, float t_s);
+
 
 //Helpers
-float getAMax(float motorTorque, float motorMomentIntertia);
-float getJMax(float AMax, float timeToAMax) ;
-float getEstimatedTrajectoryTime (float currentAngle, float targetAngle, float angularVelocity);
-void computeTrajectoryParameters(PosCtrlHandle *pHandle, float startingAngle, float movementDuration, float totalAngleMovement);
 float degreesToRad(float positionDegrees);
 float radToDegrees(float positionRad);
 float getCurrentPosition(PosCtrlHandle *pHandle);

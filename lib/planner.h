@@ -5,14 +5,17 @@
 #include <stdbool.h>
 #include "SCurveTrajectory.h"
 
-// NOTE: volatile *pointer* (not a pointer to volatile)
-extern volatile PosCtrlHandle *  plan_active;
-extern volatile uint8_t plan_ready;
 
-void Planner_Init(void);
-void Planner_BackgroundTask(void);
-void Planner_RequestReplan(void);
-void Planner_SetCruiseSpeed(float omega_cruise_rad_s);
-void Planner_SetLimits(float a_max_rad_s2, float j_max_rad_s3);
+// Vars declared in this file
+extern volatile PosCtrlHandle paths_planned[2];   // path plans from planner.c
+extern volatile uint8_t active_plan;              // active plan by planner.c
+extern volatile uint8_t inactive_plan;            // inactive plan by planner.c
 
+//Externs coming from other files
+
+
+// Function prototypes:
+
+void PosCtrl_ISRStep(void);
 #endif /* PLANNER_H */
+
