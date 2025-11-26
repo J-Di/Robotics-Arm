@@ -5,80 +5,32 @@
 #include "SCurveTrajectory.h"
 // #include "can_processing.h"
 
-
-// From externs in h file
-volatile PosCtrlHandle SCurveTrajectory = {0};
-volatile VelocityFilter motorTracker    = {0};
-volatile bool   newSetpointDetected     = false;
-volatile float  positionSetpoint        = 0.0f; // MOVE TO CAN.C
-
-// Private ISR Globals
-static volatile uint32_t sample_count = 0;
-
-// Pointers from planner.c
-extern volatile uint8_t plan_ready;
-extern volatile PosCtrlHandle* plan_active;
-
-const float armSpeed = 0.08727f; // Basically 5 degree per sec, would be externed by CAN_Processing.c
+float_t maxVelocity = 0.02f; // Default value in rad/s
 
 /*
-Returns the maximum angular acceleration based on physical motor parameters
+This function is used to initialize and returns a PosCtrlHandle object, which is used to store all the relevent information needed
+for a S Curve Trajectory 
 */
-float getAMax(float motorTorque, float motorMomentIntertia) {
-    return motorTorque / motorMomentIntertia;
+PosCtrlHandle* STrajectoryInit(){
+  float_t a_max = A_MAX;
+  float_t v_max = maxVelocity;
+  float_t j_max = J_MAX;
+
+  float_t profileSwitchingTimes = {0,0,0,0,0,0,0,0};
+  uint8_t profilePhase = 0;
+     
+  bool isTrajExecuting = false;
+  bool isWandering = false;
+
+  float_t theta = 0.0f;
 }
 
 /*
-Returns the maximum Jerk the arm can output. NOTE: This value is experimentally determined, and is essentially just an indicator
-of how long it should take to hit the target angular acceleration to smooth it out instead of it being instantaneous (ms)
+This function initializes and returns a velocity filter object, that will be used to track the motors current status
+for the duration of its ramp.
 */
-float getJMax(float AMax, float timeToAMax) {
-    return AMax / (timeToAMax / 1000); // time in ms
-}
-
-
-/*
-This function is used to initialize all of the struct parameters initially in the code
-*/
-void STrajectoryInit(PosCtrlHandle *pHandle, VelocityFilter *motorTracker){
-
-  pHandle->MovementDuration = 0.0f;
-  pHandle->AngleStep = 0.0f;
-  pHandle->SubStep[0] = 0.0f;
-  pHandle->SubStep[1] = 0.0f;
-  pHandle->SubStep[2] = 0.0f;
-  pHandle->SubStep[3] = 0.0f;
-  pHandle->SubStep[4] = 0.0f;
-  pHandle->SubStep[5] = 0.0f;
-
-  pHandle->sign = 0;      // -1 back, 0 idle, +1 forward (current), int8_t
-  pHandle->sign_prev = 0;  // last tick’s sign, this will be int8_t
-  pHandle->remainingDistance = 0; // θ_target - θ
-
-  pHandle->SamplingTime = SAMPLING_TIME; // 0.001f
-  pHandle->SubStepDuration = pHandle->SamplingTime;
-
-  pHandle->Jerk = 0.0f;
-  pHandle->CruiseSpeed = 0.0f;
-  pHandle->Acceleration = 0.0f;
-  pHandle->Omega = 0.0f;
-  pHandle->OmegaPrev = 0.0f;
-  pHandle->Theta = 0.0f;
-  pHandle->ThetaPrev = 0.0f;
-
-  pHandle->error_count = 0;
-  
-  pHandle->A_MAX = getAMax(MOTOR_TORQUE, MOTOR_MOMENT); // M/s^2 - Max angular acceleration
-  pHandle-> J_MAX = getJMax(pHandle->A_MAX, 10);
-  pHandle-> isExecutingTrajectory = false;
-  velocityFilterInit(motorTracker);
-
-  pHandle->skipAccel = false;
-  pHandle->cruiseN = 0;
-  
-}
-
-void velocityFilterInit(VelocityFilter *pHandle){
+VelocityFilter* velocityFilterInit(){
+    VelocityFilter* pHandle;
     pHandle->theta_prev = 0;
     pHandle->omega = 0;
     pHandle->omega_prev = 0;
@@ -87,159 +39,118 @@ void velocityFilterInit(VelocityFilter *pHandle){
     pHandle->Ts = SAMPLING_TIME;
 }
 
-/*
-This function calculates the required parameters and saves them to the trajectory struct, which 
-are used by the algorythm to poduce the S curver
-  * @param  pHandle handler of the current instance of the Position Control component.
-  * @param  startingAngle Current mechanical position.
-  * @param  angleStep Target mechanical position.
-  * @param  movementDuration Duration to reach the final position (in seconds).
-
-*/
-void computeTrajectoryParameters(PosCtrlHandle *pHandle, float startingAngle, float movementDuration, float totalAngleMovement){
-
-    float fMinimumStepDuration;
-    fMinimumStepDuration = (9.0f * pHandle->SamplingTime);
-
-    // Round time to fit timesteps of 1kHz
-    pHandle->MovementDuration = (float)((int)(movementDuration / fMinimumStepDuration)) * fMinimumStepDuration;
-
-    pHandle->StartingAngle = startingAngle;
-    pHandle->AngleStep = totalAngleMovement;
-    pHandle->FinalAngle = startingAngle + totalAngleMovement;
-
-    /* SubStep duration = DeltaT/9  (DeltaT represents the total duration of the programmed movement) */
-    pHandle->SubStepDuration = (float) pHandle->MovementDuration / 9.0f;
-
-    /* Sub step of acceleration phase */
-    pHandle->SubStep[0] = 1 * pHandle->SubStepDuration;   /* Sub-step 1 of acceleration phase */
-    pHandle->SubStep[1] = 2 * pHandle->SubStepDuration;   /* Sub-step 2 of acceleration phase */
-    pHandle->SubStep[2] = 3 * pHandle->SubStepDuration;   /* Sub-step 3 of acceleration phase */
-
-    /* Sub step of  deceleration Phase */
-    pHandle->SubStep[3] = 6 * pHandle->SubStepDuration;   /* Sub-step 1 of deceleration phase */
-    pHandle->SubStep[4] = 7 * pHandle->SubStepDuration;   /* Sub-step 2 of deceleration phase */
-    pHandle->SubStep[5] = 8 * pHandle->SubStepDuration;   /* Sub-step 3 of deceleration phase */
-
-    /* Jerk (J) to be used by the trajectory calculator to integrate (step by step) the target position.
-       J = DeltaTheta/(12 * A * A * A)  => DeltaTheta = final position and A = Sub-Step duration */
-    pHandle->Jerk = pHandle->AngleStep / (12 * pHandle->SubStepDuration * pHandle->SubStepDuration * pHandle->SubStepDuration);
-
-    /* Speed cruiser = 2*J*A*A) */
-    pHandle->CruiseSpeed = 2 * pHandle->Jerk * pHandle->SubStepDuration * pHandle->SubStepDuration;
-    pHandle->ElapseTime = 0.0f;
-}
 
 /*
 This function is called after each time a new setpoint is provided to the esc, so a 1Khz. It is used to update the velocity
 filter object, so that we may extract the best possible state of the current motor being controlled
+
+NOTE that there are filters available here, but current iteration is without for testing purposes
 */
-void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *pHandletemp){ //Remove the second agument when on ESC as it is a global var
-  //This is the version that will work in our escs, but not in testing
+void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *PHandleTEMP){ //Remove the second agument when on ESC as it is a global var
 
-  //Apply flitered positions (Filter mostly useful for low speed movements)
-  float currentPosition = getCurrentPosition(pHandletemp); // In the read life version, this function takes no parameters, but to simulate we will use extra version, also use rad here
-  float omegaRaw = (currentPosition - pHandle->theta_prev)/pHandle->Ts;
-  pHandle->omega = pHandle->alpha_coeff * omegaRaw + (1.0f - pHandle->alpha_coeff)* pHandle->omega;
-  float accelRaw = (pHandle->omega - pHandle->omega_prev)/pHandle->Ts;
-  pHandle->accel = 0.3f * accelRaw + 0.7f * pHandle->accel;
+  float_t Ts = pHandle->Ts;
 
-  //update previous positions now
-  pHandle->theta_prev = currentPosition;
+  //Apply position Updates --> Some have simple filters which are useful at low speeds
+  pHandle->theta_prev = pHandle->theta;
+  float_t currentPosition = getCurrentPosition(PHandleTEMP->theta); // In the read life version, this function takes no parameters, but to simulate we will use extra version, also in rad
+  pHandle->theta = currentPosition;
+
+  // Now do vel updates too
   pHandle->omega_prev = pHandle->omega;
+  float_t currentOmega = (currentPosition - pHandle->theta_prev)/Ts;
+  pHandle->omega = currentOmega;
+  // pHandle->omega = pHandle->alpha_coeff * currentOmega + (1.0f - pHandle->alpha_coeff)* pHandle->omega_prev;
+  // Now do accel updates
+
+  float_t currentAccel = (currentOmega - pHandle->omega_prev)/Ts;
+  pHandle->accel = currentAccel;
+  // pHandle->accel = 0.3f * currentAccel + 0.7f * pHandle->accel_prev;
+
 }
 
-/*
-This section is just to select the correct jerk for the right phase in the ramp according to the 9 step procedure
-*/
 
-float selectJerk(const PosCtrlHandle *p, float t)
+
+/*
+This section is just to select the correct jerk for the right phase in the ramp according to the current phase
+the S trajectory is on. This function is very important as it is what changes the Jerk, which is the only parameter
+that we can control to change the overall trajectory.
+*/
+float_t selectJerk(uint8_t profilePhase, float_t jerk){
+switch (profilePhase)
 {
-    // Input checks
-    if (!p || !p->isExecutingTrajectory) return 0.0f;
-    if (!isfinite(t) || t < 0.0f) return 0.0f;
+  case 1:
+    /*Acceleration Phase: +jerk*/
+    return jerk;
+    break;
 
-    const float T = (p->MovementDuration > 0.0f) ? p->MovementDuration : 0.0f;
-    if (T <= 0.0f) return 0.0f;
-    if (t >= T) return 0.0f;
+  case 2:
+    /*Acceleration Phase: no Jerk*/
+    return 0;
+    break;
+  
+  case 3:
+    /*Acceleration Phase: -Jerk*/
+    return -jerk;
+    break;
 
-    const float A = p->SubStepDuration;
-    if (!(A > 0.0f) || !isfinite(A)) return 0.0f;
+  case 4:
+    /*Constant velocity phase: No jerk*/
+    return 0;
+    break;
 
-    // Clamp jerk magnitude to a sane bound
-    float Jbase = p->Jerk;
-    if (!isfinite(Jbase)) Jbase = 0.0f;
-    float Jcap = 4.0f * ((p->J_MAX > 0.0f) ? p->J_MAX : fabsf(Jbase));
-    if (Jbase >  Jcap) Jbase =  Jcap;
-    if (Jbase < -Jcap) Jbase = -Jcap;
+  case 5:
+    /*Decceleration Phase: -Jerk*/
+    return -jerk;
+    break;
+  
+  case 6:
+    /*Decceleration Phase: No jerk*/
+    return 0;
+    break;
 
-    const float tA1 = p->SubStep[0];         // 1A
-    const float tA2 = p->SubStep[1];         // 2A
-    const float tA3 = p->SubStep[2];         // 3A
-    const float tD1 = p->SubStep[3];         // (3 + N)*A
-    const float tD2 = p->SubStep[4];         // (4 + N)*A
-    const float tD3 = p->SubStep[5];         // (5 + N)*A
+  case 7:
+    /*Decceleration Phase:  +jerk*/
+    return +jerk;
+    break;
 
-    // Accel lobe (3A)
-    if (t < tA1)      return p->skipAccel ? 0.0f : +Jbase;
-    else if (t < tA2) return 0.0f;
-    else if (t < tA3) return p->skipAccel ? 0.0f : -Jbase;
-
-    // Cruise plateau (N*A) -> always zero jerk
-    else if (t < tD1) return 0.0f;
-
-    // Decel lobe (3A)
-    else if (t < tD2) return -Jbase;
-    else if (t < tD3) return  0.0f;
-    else if (t < p->MovementDuration) return +Jbase;
-
-    return 0.0f; // done
+  default:
+    break;
 }
 
 
-
-/*
-This function is designed to populate the array of positions that will be fed to the ESC in order to properly execue the ramp.
-
-  * @param  planner is the handler of the S curve generator info
-  * @param  targetAngle is the desired final position of the joint (rad)
-  * @param  angularVelocity is the desired angular velocity of the cruising time (rad/s)
-  * @patam  theta_0, omega_0, and accel_0 are the initial conditions in rad, rad/s, and rad/s**2 respectively
-*/
-void SCurveTrajectoryStarter(PosCtrlHandle *planner, float targetAngle, float angularVelocity){
-
-  // Initialize required parameters
-  float t = 0.0f;
-  planner->error_count = 0;
-  float totalTime = getEstimatedTrajectoryTime(planner->Theta, targetAngle, angularVelocity); // in ms
-  float totalAngularMovement = targetAngle - planner->StartingAngle;
-  computeTrajectoryParameters(planner, planner->StartingAngle, totalTime*0.001f, totalAngularMovement);
-  planner->posTol = POS_TOL;
-  planner->velTol = VEL_TOL;
-
-  // Activate Status bools
-  planner->isExecutingTrajectory = true; 
-}
-/*
-This function computes the estimated time it will take to execute the desired motion
-
-Inputs: Current joint angle   : rad
-        Target Position angel : rad
-        desired angular velocity  : rad/sec
-Outputs: estimated trajectory time : ms
-*/
-float getEstimatedTrajectoryTime (float currentAngle, float targetAngle, float angularVelocity){
-  return (fabs(currentAngle - targetAngle) / angularVelocity) * 1000 ; // Want ms here
 }
 
+
+// C Getter Functions 
 /*
 This function is to simulate the esc getting an encoder position, for the time being it will simply extract the correct position it should be at at that point in the ramp
 */
-float getCurrentPosition(PosCtrlHandle *pHandle){
-  return pHandle->Theta;
+float_t getCurrentPosition(float_t position){
+  return position;
 }
 
-// Local helpter functions -- include the other .c custum fole for these 
+float_t getAngularVelocity(VelocityFilter* pHandle){
+    return pHandle->omega;
+}
+
+float_t getAngularAccel(VelocityFilter* pHandle){
+    return pHandle->accel;
+}
+
+float_t getJerk(VelocityFilter* pHandle){
+    return pHandle->jerk;
+}
+
+// The singular set function
+void setMaxVelocity(float_t vel){
+  //Perform Checks
+  if (abs(vel) > MAX_VEL || abs(vel) < 0.01){ 
+    return;
+  }
+  maxVelocity = vel;
+}
+
+// Some Helper Functions --Some only used for simulation
 float degreesToRad(float positionDegrees){
 	return positionDegrees*(M_PI /180.0f);
 }
@@ -247,70 +158,4 @@ float degreesToRad(float positionDegrees){
 float radToDegrees(float positionRad){
 	return (positionRad*180/M_PI);
 
-}
-
-static inline int8_t sign_db(float x, float band) {
-    return (x > band) - (x < -band);
-}
-
-void PosCtrl_ISRStep(void)
-{
-    // Acknowledge/pick up newly published plan (planner already swapped pointer)
-    if (plan_ready) {
-        plan_ready = 0;       // acknowledge
-        sample_count = 0;     // restart timing for new plan
-    }
-
-    // Alias the active plan once to avoid repeated volatile derefs
-    PosCtrlHandle *P = plan_active;
-
-
-    // Update state quickly
-    updateVelocityFilter((VelocityFilter*)&motorTracker, P);
-
-    // If no active motion, chill
-    if (!P->isExecutingTrajectory) {
-        // MC_ProgramPositionCommandMotor1(theta, 0.0f); // optional "hold" in follow mode
-        return;
-    }
-
-    // Reject malformed plans (defensive)
-  if (!(P->MovementDuration > 0.0f) ||
-      !(P->SubStepDuration > 0.0f) ||
-      !isfinite(P->Jerk)) {
-      P->isExecutingTrajectory = false;
-      return;
-  }
-
-    // Jerk select + integrate (strict O(1) path)
-    const float Ts = (P->SamplingTime > 0.0f) ? P->SamplingTime : SAMPLING_TIME;
-
-    float t = (float)sample_count * Ts;
-    if (t > P->MovementDuration) t = P->MovementDuration;
-
-    const float J = selectJerk(P, t);
-
-    // Integrate jerk → accel → vel → pos
-    P->Acceleration += J * Ts;
-
-    // physical accel clamp
-    if (P->A_MAX > 0.0f) {
-        if (P->Acceleration >  P->A_MAX) P->Acceleration =  P->A_MAX;
-        if (P->Acceleration < -P->A_MAX) P->Acceleration = -P->A_MAX;
-    }
-
-    P->Omega += P->Acceleration * Ts;
-    P->Theta += P->Omega        * Ts;
-
-    // 5) Emit next point in FOLLOW mode (duration = 0)
-    // MC_ProgramPositionCommandMotor1(P->Theta, 0.0f);
-
-    sample_count++;
-
-    // 6) Completion handling
-    if (t >= P->MovementDuration) {
-        P->isExecutingTrajectory = false;
-        P->Theta = P->FinalAngle;      // ensure exact final position
-        // MC_ProgramPositionCommandMotor1(P->Theta, 0.0f);
-    }
 }
