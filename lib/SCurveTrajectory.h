@@ -27,6 +27,9 @@ typedef struct
      
   bool isTrajExecuting; // A boolean to indicate if a current profile is currently being executed 
   bool isWandering; // A boolean to indicate if a profile must stop, and then move backwards to hit a certain setpoint
+
+  float_t theta; // TEMPORARY, TO MAKE WORK WITHOUT ENCODER TELLING YOU ANGLE Just feeds where it should have been based om 
+                //  the ramp simulated -> ideal case
 } PosCtrlHandle;
 
 /*
@@ -60,6 +63,6 @@ extern volatile bool newSetpointDetected;         // set by CAN_processing.c
 //Helpers
 float degreesToRad(float positionDegrees);
 float radToDegrees(float positionRad);
-float getCurrentPosition(PosCtrlHandle *pHandle);
+float getCurrentPosition(float position);
 
 #endif /* S_CURVE_TRAJECTORY_H */
