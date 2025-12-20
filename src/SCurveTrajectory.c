@@ -11,18 +11,18 @@ float_t maxVelocity = 0.02f; // Default value in rad/s
 This function is used to initialize and returns a PosCtrlHandle object, which is used to store all the relevent information needed
 for a S Curve Trajectory 
 */
-PosCtrlHandle* STrajectoryInit(){
-  float_t a_max = A_MAX;
-  float_t v_max = maxVelocity;
-  float_t j_max = J_MAX;
+PosCtrlHandle* STrajectoryInit(float_t currentPos){
 
-  float_t profileSwitchingTimes = {0,0,0,0,0,0,0,0};
-  uint8_t profilePhase = 0;
-     
-  bool isTrajExecuting = false;
-  bool isWandering = false;
-
-  float_t theta = 0.0f;
+    PosCtrlHandle* pHandle;
+    pHandle->a_max = A_MAX;
+    pHandle->v_max = maxVelocity;
+    pHandle->j_max = J_MAX;
+    pHandle->profileSwitchingTimes = {0,0,0,0,0,0,0,0};
+    pHandle->profilePhase = 0;
+    pHandle->isTrajExecuting = false;
+    pHandle->isWandering = false;
+    pHandle->theta = currentPos;
+    return pHandle;
 }
 
 /*
@@ -37,6 +37,7 @@ VelocityFilter* velocityFilterInit(){
     pHandle->accel = 0;
     pHandle->alpha_coeff = VEL_FILTER_COEFFICIENT;
     pHandle->Ts = SAMPLING_TIME;
+    return pHandle;
 }
 
 

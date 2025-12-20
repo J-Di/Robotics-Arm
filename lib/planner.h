@@ -6,13 +6,14 @@
 #include "SCurveTrajectory.h"
 
 
-// Vars declared in this file
-// extern volatile PosCtrlHandle paths_planned[2];   // path plans from planner.c
-// extern volatile uint8_t active_plan;              // active plan by planner.c
-// extern volatile uint8_t inactive_plan;            // inactive plan by planner.c
-extern volatile VelocityFilter motorTracker;        // by planner.c
+// Local Vars declared in this file and 
+extern volatile PosCtrlHandle *paths_planned[2];    // path plans from planner.c, extern to main.c for interrupt processing
+extern volatile VelocityFilter *motorTracker;       // by planner.c, , extern to main.c for interrupt processing
+extern volatile uint8_t active_plan;              // active plan by planner.c, , extern to main.c for interrupt processing
+extern volatile uint8_t inactive_plan;            // inactive plan by planner.c, , extern to main.c for interrupt processing
 
-//Externs coming from other files
+// Vars from main.c
+
 
 
 // Function prototypes:
