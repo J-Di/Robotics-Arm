@@ -20,7 +20,8 @@ PosCtrlHandle* STrajectoryInit(float_t currentPos){
     pHandle->profileSwitchingTimes = {0,0,0,0,0,0,0,0};
     pHandle->profilePhase = 0;
     pHandle->isTrajExecuting = false;
-    pHandle->isWandering = false;
+    pHandle->isWandering = false; 
+    pHandle->isPastTooFast = false;
     pHandle->theta = currentPos;
     return pHandle;
 }

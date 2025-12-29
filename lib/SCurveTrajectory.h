@@ -27,10 +27,11 @@ typedef struct
   float_t j_max;
 
   float_t profileSwitchingTimes[8]; // Array of times where profile state switches [t0,t1,t2,t3,t4,t5,t6,t7]
-  uint8_t profilePhase; //Current Phase of the profile: 1,2,3,4,5,6,7 (1-3: Accel) | 4: Constant V | (5-7: Decel)
+  uint8_t profilePhase; //Current Phase of the profile: 1,2,3,4,5,6,7 (1-3: Accel) | 4: Constant V | (5-7: Decel), 8, 9 ,10 are special cases
      
   bool isTrajExecuting; // A boolean to indicate if a current profile is currently being executed 
   bool isWandering; // A boolean to indicate if a profile must stop, and then move backwards to hit a certain setpoint
+  bool isPastTooFast; // A boolean to indicate if the virtual ramp velocity is faster than the current, in which 
 
   float_t theta; // TEMPORARY, TO MAKE WORK WITHOUT ENCODER TELLING YOU ANGLE Just feeds where it should have been based om 
                 //  the ramp simulated -> ideal case

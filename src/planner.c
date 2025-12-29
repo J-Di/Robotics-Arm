@@ -38,11 +38,14 @@ newly prepared one.
 */
 void buildNewCurve(void){
 
-    PosCtrlHandle currPlan = *paths_planned[active_plan];
+    PosCtrlHandle *currPlan = *paths_planned[active_plan];
 
     // Check to see if we are starting from scratch, or smt is executing
-    if (currPlan.isTrajExecuting){
+    if (currPlan->isTrajExecuting){
         float_t initialVelocity = calculateVirtualHistory(paths_planned[active_plan], motorTracker);
+    }
+    else{
+        float_t initialVelocity = 0;
     }
 
 
@@ -59,9 +62,80 @@ on the assumption that at the start the motion has no acceleration.
 float_t calculateVirtualHistory(PosCtrlHandle *currentMotionPlan, VelocityFilter *motorTracker){
 
     // start by extracting the initial conditions
-    float_t theta0 = motorTracker->theta;
-    float_t omega0 = motorTracker->omega;
-    float_t 
+    float_t sc = motorTracker->theta;
+    float_t vc = motorTracker->omega;
+    float_t ac = motorTracker->accel;
+
+    // maximum values
+    float_t jmax = currentMotionPlan->j_max;
+    float_t amax = currentMotionPlan->a_max;
+
+    // virtual initial parameters
+    float_t virt_v0;
+    float_t virt_s0; 
+
+
+    // calculate virtual history of current motor status, refer to flowchart for better understanding
+    switch(currentMotionPlan->profilePhase){
+
+        case (1):
+            virt_v0 =   vc - (ac/2) * (ac/jmax);
+            virt_s0 =   sc - (ac/6) * (ac/jmax)**2;
+            break;
+        case(2):
+            virt_v0 =   vc - (amax/2) * (amax/jmax);
+            virt_s0 =   sc - (amax/6) * (amax/jmax)**2;
+            break;
+        case(3):
+            virt_v0 =   vc - (ac/2) * (ac/jmax);
+            virt_s0 =   sc - (ac/6) * (ac/jmax)**2;
+            break;
+        case(4):
+            // This is just the baseline condition
+            virt_v0 = vc;
+            virt_s0 = sc;
+            break;
+        case(5):
+            currentMotionPlan->isPastTooFast = false;
+            virt_v0 =   vc - (ac/2) * (ac/jmax); 
+            if (virt_v0 > vc ){
+                // we are in the case where the virtual velocity is greater than current
+                currentMotionPlan->isPastTooFast = true;
+                virt_s0 = 0.00f; // arbitrary value for now, wont effect result
+            }
+            else{
+                virt_s0 = sc - (ac/6) * (ac/jmax)**2 + virt_v0 * (ac/jmax);
+            }
+            break;
+        case(6):
+            currentMotionPlan->isPastTooFast = false;
+            virt_v0 =   vc + (amax/2) * (ac/jmax); 
+            if (virt_v0 > vc ){
+                // we are in the case where the virtual velocity is greater than current
+                currentMotionPlan->isPastTooFast = true;
+                virt_s0 = 0.00f; // arbitrary value for now, wont effect result
+            }
+            else{
+                virt_s0 = sc + (amax/6) * (amax/jmax)**2 - virt_v0 * (ac/jmax);
+            }
+            break;
+        case(7):
+            currentMotionPlan->isPastTooFast = false;
+            virt_v0 =   vc - (ac/2) * (ac/jmax); 
+            if (virt_v0 > vc ){
+                // we are in the case where the virtual velocity is greater than current
+                currentMotionPlan->isPastTooFast = true;
+                virt_s0 = 0.00f; // arbitrary value for now, wont effect result
+            }
+            else{
+                virt_s0 = sc - (ac/6) * (ac/jmax)**2 + virt_v0 * (ac/jmax);
+            }
+            break;
+
+    }
+    
+
+
 
 }
 
