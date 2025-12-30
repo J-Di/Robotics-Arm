@@ -13,6 +13,8 @@ float_t trajTime = 0.0f;                   // overall time of current ramp
 //Function prototypes:
 
 
+// Struct prototypes 
+
 /* This function is called once at the start of the code, and it is used to setup the planner for the current ESC. 
     It populates both "active" and "unactive plan", which are used in the 1KHz ISR to control the motor position
 */
@@ -40,14 +42,23 @@ void buildNewCurve(void){
 
     PosCtrlHandle *currPlan = *paths_planned[active_plan];
 
-    // Check to see if we are starting from scratch, or smt is executing
+    // local function vars
+    float_t newInitialVel;
+    float_t newInitialPos;
+
+    // CUpdate initial positions based on if ramp is being executed or not, to be fed into sectionA
     if (currPlan->isTrajExecuting){
-        float_t initialVelocity = calculateVirtualHistory(paths_planned[active_plan], motorTracker);
+        // Section B is invoked
+        historyParameters* virtualInitialCond = calculateVirtualHistory(paths_planned[active_plan], motorTracker);
+        newInitialVel = virtualInitialCond->virt_v0;
+        newInitialPos = virtualInitialCond->virt_s0;
     }
     else{
-        float_t initialVelocity = 0;
+        newinitialVel = motorTracker->omega;
+        newInitialPos = motorTracker->theta;
     }
 
+    //Now create new ramp based on initial parameters
 
 
 
@@ -59,7 +70,7 @@ Given a currenlty executing ramp, this function will return what would have been
 should it had started with no acceleration. This velocity is essential in order to compute a new ramp, which relies
 on the assumption that at the start the motion has no acceleration.
 */
-float_t calculateVirtualHistory(PosCtrlHandle *currentMotionPlan, VelocityFilter *motorTracker){
+virtualHistory* calculateVirtualHistory(PosCtrlHandle *currentMotionPlan, VelocityFilter *motorTracker){
 
     // start by extracting the initial conditions
     float_t sc = motorTracker->theta;
@@ -73,6 +84,7 @@ float_t calculateVirtualHistory(PosCtrlHandle *currentMotionPlan, VelocityFilter
     // virtual initial parameters
     float_t virt_v0;
     float_t virt_s0; 
+
 
 
     // calculate virtual history of current motor status, refer to flowchart for better understanding
@@ -131,12 +143,15 @@ float_t calculateVirtualHistory(PosCtrlHandle *currentMotionPlan, VelocityFilter
                 virt_s0 = sc - (ac/6) * (ac/jmax)**2 + virt_v0 * (ac/jmax);
             }
             break;
-
+        
+        default:
+            break;
     }
-    
 
+    // create virtual history object
+    virtualHistory historyParameters = {virt_v0, virt_s0};
 
-
+    return &historyParameters;
 }
 
 
@@ -146,7 +161,7 @@ the critical cutoff times for each of the 7 steps in the S-Curve. This will be u
 the ramp the motor is in, and thus the jerk to apply in order to get to the target position. Note if an initial acceleration
 is present, then calculateVirtualHistory muust first be called in order to properly simulate the proper condition.
 */
-[8]float_t determineSwitchingTimes (float_t targetPos, VelocityFilter *motorTracker){
+switchingTimes* determineSwitchingTimes (float_t targetPos, VelocityFilter *motorTracker){
 
 
 

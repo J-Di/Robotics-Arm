@@ -14,6 +14,14 @@ extern volatile uint8_t inactive_plan;            // inactive plan by planner.c,
 
 // Vars from main.c
 
+// Structs
+
+// Structure that houses virtual history of the current moving motor, mainly for return
+struct virtualHistory{
+    float_t virt_v0;
+    float_t virt_s0;
+}
+
 
 
 // Function prototypes:
