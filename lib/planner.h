@@ -17,14 +17,24 @@ extern volatile uint8_t inactive_plan;            // inactive plan by planner.c,
 // Structs
 
 // Structure that houses virtual history of the current moving motor, mainly for return
-struct virtualHistory{
+typedef struct virtualHistory{
     float_t virt_v0;
     float_t virt_s0;
-}
+} virtualHistory;
 
-
+//Structure that houses the esc phase switching times, that will determine which jerk to apply
+typedef struct switchingTimes{
+    float_t t1;
+    float_t t2;
+    float_t t3;
+    float_t t4;
+    float_t t5;
+    float_t t6;
+    float_t t7;
+    bool isWandering;
+} switchingTimes;
 
 // Function prototypes:
 void PosCtrl_ISRStep(void);
-#endif /* PLANNER_H */
+#endif 
 

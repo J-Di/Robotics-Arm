@@ -20,8 +20,7 @@
 #define SAMPLING_TIME 0.001 // in s, 1kHz
 #define VEL_FILTER_COEFFICIENT 0.2 // Alter this for smoothening out filter
 
-typedef struct
-{
+typedef struct posCtrlHandle {
   float_t a_max;
   float_t v_max;
   float_t j_max;
@@ -33,6 +32,7 @@ typedef struct
   bool isWandering; // A boolean to indicate if a profile must stop, and then move backwards to hit a certain setpoint
   bool isPastTooFast; // A boolean to indicate if the virtual ramp velocity is faster than the current, in which 
 
+  int dir; // variable that stores the current direction relative the moving direction (1 indicates velocity in direction of setpoint, -1 mean sopposite, 0 means idle)
   float_t theta; // TEMPORARY, TO MAKE WORK WITHOUT ENCODER TELLING YOU ANGLE Just feeds where it should have been based om 
                 //  the ramp simulated -> ideal case
 } PosCtrlHandle;
@@ -68,6 +68,7 @@ float_t getJerk(VelocityFilter* pHandle);
 float_t getAngularAccel(VelocityFilter* pHandle);
 float_t getAngularVelocity(VelocityFilter* pHandle);
 float_t getCurrentPosition(float_t position); // Special Case as might wanna return encoder adn degrees instead of this radians one
+PosCtrlHandle* STrajectoryInit(float_t currentPos);
 
 //Helpers
 float degreesToRad(float positionDegrees);

@@ -6,13 +6,14 @@ SRCDIR := src
 INCDIR := lib
 OBJDIR := build
 
+
 # Automatically find all .c files in /src
 SRC := $(wildcard $(SRCDIR)/*.c)
 OBJ := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRC))
 
 # Compiler / flags
 CC      := gcc
-CFLAGS  := -std=c11 -O2 -Wall -Wextra -I$(INCDIR)
+CFLAGS = -Wall -Wextra -g -Ilib
 LDFLAGS := -lm
 
 # === Rules ====================================================================

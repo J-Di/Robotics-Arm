@@ -13,11 +13,17 @@ for a S Curve Trajectory
 */
 PosCtrlHandle* STrajectoryInit(float_t currentPos){
 
-    PosCtrlHandle* pHandle;
+    PosCtrlHandle* pHandle = malloc (sizeof(PosCtrlHandle));
+    if (!pHandle){
+      return pHandle;
+    }
     pHandle->a_max = A_MAX;
     pHandle->v_max = maxVelocity;
     pHandle->j_max = J_MAX;
-    pHandle->profileSwitchingTimes = {0,0,0,0,0,0,0,0};
+
+    for (int i = 0; i < 8; i++) {
+      pHandle->profileSwitchingTimes[i] = 0.0f; // We love c
+    }
     pHandle->profilePhase = 0;
     pHandle->isTrajExecuting = false;
     pHandle->isWandering = false; 
@@ -31,11 +37,14 @@ This function initializes and returns a velocity filter object, that will be use
 for the duration of its ramp.
 */
 VelocityFilter* velocityFilterInit(){
-    VelocityFilter* pHandle;
-    pHandle->theta_prev = 0;
-    pHandle->omega = 0;
-    pHandle->omega_prev = 0;
-    pHandle->accel = 0;
+    VelocityFilter* pHandle = malloc(sizeof(VelocityFilter));
+    if (!pHandle){
+      return pHandle;
+    }
+    pHandle->theta_prev = 0.0f;
+    pHandle->omega = 0.0f;
+    pHandle->omega_prev = 0.0f;
+    pHandle->accel = 0.0f;
     pHandle->alpha_coeff = VEL_FILTER_COEFFICIENT;
     pHandle->Ts = SAMPLING_TIME;
     return pHandle;
@@ -121,7 +130,6 @@ switch (profilePhase)
 
 
 }
-
 
 // C Getter Functions 
 /*
