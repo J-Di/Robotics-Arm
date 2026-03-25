@@ -10,7 +10,6 @@ volatile uint8_t inactive_plan;            // inactive plan by planner.c
 volatile VelocityFilter *motorTracker;
 float_t trajTime = 0.0f;                   // overall time of current ramp
 volatile bool plan_ready = false;          // flag for ISR to know a new plan is waiting
-float_t trajTime = 0.0f;                   // overall time of current ramp
 static float_t targetSetpoint = 0.0f;      // stored target for wandering replans
 
 //Function prototypes:
@@ -587,8 +586,6 @@ void calculateNewRamp(PosCtrlHandle *newPlan, VelocityFilter *motorTracker, floa
     // Signal the ISR that a new plan is ready to swap in
     plan_ready = true;
 }
-
-
 
 /* 
    PosCtrl_ISRStep

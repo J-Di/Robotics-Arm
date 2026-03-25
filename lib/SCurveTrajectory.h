@@ -1,3 +1,6 @@
+#ifndef S_CURVE_TRAJECTORY_H
+#define S_CURVE_TRAJECTORY_H
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -8,71 +11,81 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
-#ifndef S_CURVE_TRAJECTORY_H
-#define S_CURVE_TRAJECTORY_H
+/* 
+   Motor / trajectory constraint parameters
+   TODO: Determine actual values from motor characterization
+*/
+#define A_MAX       100.0f   // Max acceleration [rad/s^2]
+#define J_MAX       20.0f    // Max jerk [rad/s^3]
+#define MAX_VEL     1.4f     // Absolute max velocity [rad/s] (~80 deg/s)
 
-//Motor based parameters -> must calculate
-#define A_MAX 100   // FIGURE THIS OUT 
-#define J_MAX 20     // FIGURE THIS OUT
-#define MAX_VEL 1.4 // FIGURE THIS OUT idk whatever 40 degress/s is in rad
+/* Sampling and filter parameters */
+#define SAMPLING_TIME           0.001f  // ISR period [s] (1 kHz)
+#define VEL_FILTER_COEFFICIENT  0.2f    // EMA alpha for velocity filter
 
-//These are for the elbow motor, and will need to make a helper function to extract for rover depending on esc
-#define SAMPLING_TIME 0.001 // in s, 1kHz
-#define VEL_FILTER_COEFFICIENT 0.2 // Alter this for smoothening out filter
-
+/* 
+   PosCtrlHandle — stores the full state of one S-curve trajectory plan
+*/
 typedef struct posCtrlHandle {
-  float_t a_max;
-  float_t v_max;
-  float_t j_max;
+    float_t a_max;
+    float_t v_max;
+    float_t j_max;
 
-  float_t profileSwitchingTimes[8]; // Array of times where profile state switches [t0,t1,t2,t3,t4,t5,t6,t7]
-  uint8_t profilePhase; //Current Phase of the profile: 1,2,3,4,5,6,7 (1-3: Accel) | 4: Constant V | (5-7: Decel), 8, 9 ,10 are special cases
-     
-  bool isTrajExecuting; // A boolean to indicate if a current profile is currently being executed 
-  bool isWandering; // A boolean to indicate if a profile must stop, and then move backwards to hit a certain setpoint
-  bool isPastTooFast; // A boolean to indicate if the virtual ramp velocity is faster than the current, in which 
+    float_t profileSwitchingTimes[8]; // Absolute phase-switch times [t0..t7]
+    uint8_t profilePhase;             // Current phase: 1-7 (0 = idle)
 
-  int dir; // variable that stores the current direction relative the moving direction (1 indicates velocity in direction of setpoint, -1 mean sopposite, 0 means idle)
-  float_t theta; // TEMPORARY, TO MAKE WORK WITHOUT ENCODER TELLING YOU ANGLE Just feeds where it should have been based om 
-                //  the ramp simulated -> ideal case
+    bool isTrajExecuting;  // True while a trajectory is being followed
+    bool isWandering;      // True if motor must stop then reverse to reach setpoint
+    bool isPastTooFast;    // True if virtual v0 > vc during decel-phase target change
+
+    int   dir;             // Motion direction: +1 toward target, -1 away, 0 idle
+    float_t theta;         // Planned position [rad] (simulation stand-in for encoder)
 } PosCtrlHandle;
 
-/*
-This struct is to be used as a velocity filter that holds the acual values of the motor state, retrieved and updated through the encoder itself
+/* 
+   VelocityFilter — tracks actual motor state from encoder readings
 */
 typedef struct {
-    float_t theta;
-    float_t theta_prev;     // last angle reading [rad]
-    float_t omega;          // filtered velocity [rad/s]
-    float_t omega_prev;
-    float_t accel;
-    float_t accel_prev;
-    float_t alpha_coeff;    // filter coefficient (0..1)
-    float_t Ts;             // sample period [s]
-    float_t jerk;           // This is mostly included for testing purposes
+    float_t theta;          // Current position [rad]
+    float_t theta_prev;     // Previous position [rad]
+    float_t omega;          // Filtered velocity [rad/s]
+    float_t omega_prev;     // Previous velocity [rad/s]
+    float_t accel;          // Filtered acceleration [rad/s^2]
+    float_t accel_prev;     // Previous acceleration [rad/s^2]
+    float_t alpha_coeff;    // EMA filter coefficient (0..1)
+    float_t Ts;             // Sample period [s]
+    float_t jerk;           // Jerk estimate (mainly for testing)
 } VelocityFilter;
 
-// Var declared in this file
+/* 
+   Externs — variables owned by other modules
+*/
+extern volatile float positionSetpoint;    // Set by CAN_processing.c
+extern volatile bool  newSetpointDetected; // Set by CAN_processing.c
 
-// Externs Vars
-// extern volatile PosCtrlHandle paths_planned[2];   // path plans from planner.c
-// extern volatile uint8_t active_plan;              // active plan by planner.c
-// extern volatile uint8_t inactive_plan;            // inactive plan by planner.c
-// extern volatile VelocityFilter motorTracker;      // motor state tracker from planner.c
+/* 
+   Function prototypes
+*/
 
-extern volatile float positionSetpoint;           // set by CAN_processing.c
-extern volatile bool newSetpointDetected;         // set by CAN_processing.c
+// Initialization
+PosCtrlHandle*  STrajectoryInit(float_t currentPos);
+VelocityFilter* velocityFilterInit(void);
 
-//Relevent Function Prototypes
-float_t getJerk(VelocityFilter* pHandle);
-float_t getAngularAccel(VelocityFilter* pHandle);
-float_t getAngularVelocity(VelocityFilter* pHandle);
-float_t getCurrentPosition(float_t position); // Special Case as might wanna return encoder adn degrees instead of this radians one
-PosCtrlHandle* STrajectoryInit(float_t currentPos);
+// Runtime
+void    updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *planHandle);
+float_t selectJerk(uint8_t profilePhase, float_t jerk);
 
-//Helpers
+// Getters
+float_t getCurrentPosition(float_t position);  // Simulation stub — returns position as-is
+float_t getAngularVelocity(VelocityFilter *pHandle);
+float_t getAngularAccel(VelocityFilter *pHandle);
+float_t getJerk(VelocityFilter *pHandle);
+
+// Setters
+void setMaxVelocity(float_t vel);
+
+// Helpers
 float degreesToRad(float positionDegrees);
 float radToDegrees(float positionRad);
-float getCurrentPosition(float position);
 
 #endif /* S_CURVE_TRAJECTORY_H */

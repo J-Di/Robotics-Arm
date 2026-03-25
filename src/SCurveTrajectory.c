@@ -5,78 +5,101 @@
 #include "SCurveTrajectory.h"
 // #include "can_processing.h"
 
-float_t maxVelocity = 0.02f; // Default value in rad/s
+/* Runtime-adjustable velocity limit (default very low for safety) */
+static float_t maxVelocity = 0.02f;  // [rad/s]
 
 /*
-This function is used to initialize and returns a PosCtrlHandle object, which is used to store all the relevent information needed
-for a S Curve Trajectory 
+   STrajectoryInit
+   Allocates and initializes a PosCtrlHandle for one trajectory plan buffer.
+   Returns NULL on allocation failure.
 */
 PosCtrlHandle* STrajectoryInit(float_t currentPos){
 
-    PosCtrlHandle* pHandle = malloc (sizeof(PosCtrlHandle));
+    PosCtrlHandle *pHandle = malloc(sizeof(PosCtrlHandle));
     if (!pHandle){
-      return pHandle;
+        return NULL;
     }
+
     pHandle->a_max = A_MAX;
     pHandle->v_max = maxVelocity;
     pHandle->j_max = J_MAX;
 
-    for (int i = 0; i < 8; i++) {
-      pHandle->profileSwitchingTimes[i] = 0.0f; // We love c
+    for (int i = 0; i < 8; i++){
+        pHandle->profileSwitchingTimes[i] = 0.0f;
     }
-    pHandle->profilePhase = 0;
+
+    pHandle->profilePhase   = 0;
     pHandle->isTrajExecuting = false;
-    pHandle->isWandering = false; 
-    pHandle->isPastTooFast = false;
-    pHandle->theta = currentPos;
+    pHandle->isWandering    = false;
+    pHandle->isPastTooFast  = false;
+    pHandle->dir            = 0;     // idle
+    pHandle->theta          = currentPos;
+
     return pHandle;
 }
-
 /*
-This function initializes and returns a velocity filter object, that will be used to track the motors current status
-for the duration of its ramp.
+   velocityFilterInit
+   Allocates and zero-initializes a VelocityFilter for motor state tracking.
+   Returns NULL on allocation failure.
 */
-VelocityFilter* velocityFilterInit(){
-    VelocityFilter* pHandle = malloc(sizeof(VelocityFilter));
+VelocityFilter* velocityFilterInit(void){
+
+    VelocityFilter *pHandle = malloc(sizeof(VelocityFilter));
     if (!pHandle){
-      return pHandle;
+        return NULL;
     }
-    pHandle->theta_prev = 0.0f;
-    pHandle->omega = 0.0f;
-    pHandle->omega_prev = 0.0f;
-    pHandle->accel = 0.0f;
+
+    pHandle->theta       = 0.0f;
+    pHandle->theta_prev  = 0.0f;
+    pHandle->omega       = 0.0f;
+    pHandle->omega_prev  = 0.0f;
+    pHandle->accel       = 0.0f;
+    pHandle->accel_prev  = 0.0f;
     pHandle->alpha_coeff = VEL_FILTER_COEFFICIENT;
-    pHandle->Ts = SAMPLING_TIME;
+    pHandle->Ts          = SAMPLING_TIME;
+    pHandle->jerk        = 0.0f;
+
     return pHandle;
 }
 
 
+
 /*
-This function is called after each time a new setpoint is provided to the esc, so a 1Khz. It is used to update the velocity
-filter object, so that we may extract the best possible state of the current motor being controlled
+   updateVelocityFilter
+   Called each ISR tick to update the velocity filter with the latest motor
+   state. In simulation, reads position from planHandle->theta. On real
+   hardware, this should read the encoder instead.
 
-NOTE that there are filters available here, but current iteration is without for testing purposes
+   Currently uses raw finite-difference derivatives. EMA filter lines are
+   commented out — enable them once real encoder noise is characterized.
 */
-void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *PHandleTEMP){ //Remove the second agument when on ESC as it is a global var
+void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *planHandle){
 
-  float_t Ts = pHandle->Ts;
+    float_t Ts = pHandle->Ts;
 
-  //Apply position Updates --> Some have simple filters which are useful at low speeds
-  pHandle->theta_prev = pHandle->theta;
-  float_t currentPosition = getCurrentPosition(PHandleTEMP->theta); // In the read life version, this function takes no parameters, but to simulate we will use extra version, also in rad
-  pHandle->theta = currentPosition;
+    //  Position update 
+    pHandle->theta_prev = pHandle->theta;
+    // In real firmware: replace with encoder read (no parameter needed)
+    float_t currentPosition = getCurrentPosition(planHandle->theta);
+    pHandle->theta = currentPosition;
 
-  // Now do vel updates too
-  pHandle->omega_prev = pHandle->omega;
-  float_t currentOmega = (currentPosition - pHandle->theta_prev)/Ts;
-  pHandle->omega = currentOmega;
-  // pHandle->omega = pHandle->alpha_coeff * currentOmega + (1.0f - pHandle->alpha_coeff)* pHandle->omega_prev;
-  // Now do accel updates
+    //  Velocity update 
+    pHandle->omega_prev = pHandle->omega;
+    float_t rawOmega = (currentPosition - pHandle->theta_prev) / Ts;
+    pHandle->omega = rawOmega;
+    // Filtered version (uncomment when testing with real encoder noise):
+    // pHandle->omega = pHandle->alpha_coeff * rawOmega
+    //                + (1.0f - pHandle->alpha_coeff) * pHandle->omega_prev;
 
-  float_t currentAccel = (currentOmega - pHandle->omega_prev)/Ts;
-  pHandle->accel = currentAccel;
-  // pHandle->accel = 0.3f * currentAccel + 0.7f * pHandle->accel_prev;
+    //  Acceleration update 
+    pHandle->accel_prev = pHandle->accel;
+    float_t rawAccel = (pHandle->omega - pHandle->omega_prev) / Ts;
+    pHandle->accel = rawAccel;
+    // Filtered version:
+    // pHandle->accel = 0.3f * rawAccel + 0.7f * pHandle->accel_prev;
 
+    //  Jerk update (for diagnostics / testing) 
+    pHandle->jerk = (pHandle->accel - pHandle->accel_prev) / Ts;
 }
 
 
@@ -85,51 +108,28 @@ void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *PHandleTEMP){ 
 This section is just to select the correct jerk for the right phase in the ramp according to the current phase
 the S trajectory is on. This function is very important as it is what changes the Jerk, which is the only parameter
 that we can control to change the overall trajectory.
+
+  Maps the current S-curve phase (1–7) to the correct jerk sign.
+  Paper eq (5):
+    Phase 1,7:  +j_max   (jerk ramp up / ramp back)
+    Phase 2,4,6: 0       (constant accel or constant vel)
+    Phase 3,5:  -j_max   (jerk ramp down)
+  Returns 0.0 for any unexpected phase value (including 0 = idle).
 */
 float_t selectJerk(uint8_t profilePhase, float_t jerk){
-switch (profilePhase)
-{
-  case 1:
-    /*Acceleration Phase: +jerk*/
-    return jerk;
-    break;
 
-  case 2:
-    /*Acceleration Phase: no Jerk*/
-    return 0;
-    break;
-  
-  case 3:
-    /*Acceleration Phase: -Jerk*/
-    return -jerk;
-    break;
-
-  case 4:
-    /*Constant velocity phase: No jerk*/
-    return 0;
-    break;
-
-  case 5:
-    /*Decceleration Phase: -Jerk*/
-    return -jerk;
-    break;
-  
-  case 6:
-    /*Decceleration Phase: No jerk*/
-    return 0;
-    break;
-
-  case 7:
-    /*Decceleration Phase:  +jerk*/
-    return +jerk;
-    break;
-
-  default:
-    break;
+    switch (profilePhase){
+        case 1:  return  jerk;   // Phase I:   accel increasing
+        case 2:  return  0.0f;   // Phase II:  constant max accel
+        case 3:  return -jerk;   // Phase III: accel decreasing
+        case 4:  return  0.0f;   // Phase IV:  constant velocity
+        case 5:  return -jerk;   // Phase V:   decel increasing
+        case 6:  return  0.0f;   // Phase VI:  constant max decel
+        case 7:  return  jerk;   // Phase VII: decel decreasing
+        default: return  0.0f;   // Idle or invalid phase
+    }
 }
 
-
-}
 
 // C Getter Functions 
 /*
@@ -151,13 +151,17 @@ float_t getJerk(VelocityFilter* pHandle){
     return pHandle->jerk;
 }
 
-// The singular set function
+/* 
+   setMaxVelocity
+   Runtime setter for the velocity limit. Rejects values outside [0.01, MAX_VEL].
+   Note: only affects plans created AFTER this call (existing plans keep their
+   v_max until re-initialized).
+   */
 void setMaxVelocity(float_t vel){
-  //Perform Checks
-  if (abs(vel) > MAX_VEL || abs(vel) < 0.01){ 
-    return;
-  }
-  maxVelocity = vel;
+    if (fabsf(vel) > MAX_VEL || fabsf(vel) < 0.01f){
+        return;
+    }
+    maxVelocity = vel;
 }
 
 // Some Helper Functions --Some only used for simulation
