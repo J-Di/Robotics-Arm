@@ -5,6 +5,7 @@ LDFLAGS = -lm
 
 SRC_DIR   = src
 BUILD_DIR = build
+TEST_DIR  = test
 TARGET    = sim
 
 SRCS = $(SRC_DIR)/main.c \
@@ -30,7 +31,9 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) sim_*.csv sim_*.png
+	rm -rf $(BUILD_DIR) $(TARGET) \
+		sim_*.csv sim_*.png \
+		$(TEST_DIR)/sim_*.csv $(TEST_DIR)/sim_*.png
 
 # Run all built-in scenarios
 run: $(TARGET)
@@ -38,6 +41,6 @@ run: $(TARGET)
 
 # Plot all generated CSVs
 plot:
-	python3 plot_trajectory.py sim_*.csv
+	python3 plot_trajectory.py $(TEST_DIR)/sim_*.csv
 
 .PHONY: all clean run plot

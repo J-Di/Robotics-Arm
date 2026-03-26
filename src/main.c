@@ -7,6 +7,7 @@
 
 // Define a path for the tests
 
+char * PATH = "./test/";
 /* *
    These externs are declared in SCurveTrajectory.h — main.c owns them.
    * */
@@ -22,6 +23,11 @@ typedef struct {
     float time_s;       // when to inject (seconds from sim start)
     float setpoint;     // position setpoint in radians
 } SetpointEvent;
+
+// Funciton to build paths easily
+static void buildPath(char *out, const char *filename){
+    snprintf(out, 256, "%s%s", PATH, filename);
+}
 
 /* *
    CSV logger — writes one row per ISR tick
@@ -111,8 +117,12 @@ static void scenario_simple(void){
     SetpointEvent events[] = {
         { 0.01f, degreesToRad(45.0f) }
     };
+    
+    char path[256];
+    buildPath(path, "sim_simple.csv");
+
     runScenario("Simple 0 -> 45 deg",
-                events, 1, 3.0f, "sim_simple.csv");
+                events, 1, 3.0f, path);
 }
 
 // Scenario 2: Mid-motion setpoint change — same direction, farther
@@ -121,8 +131,11 @@ static void scenario_extend(void){
         { 0.01f, degreesToRad(30.0f) },
         { 0.80f, degreesToRad(60.0f) },
     };
+
+    char path[256];
+    buildPath(path, "sim_extend.csv");
     runScenario("Extend: 30 deg -> 60 deg mid-motion",
-                events, 2, 4.0f, "sim_extend.csv");
+                events, 2, 4.0f, path);
 }
 
 // Scenario 3: Mid-motion setpoint change — same direction, closer
@@ -131,8 +144,11 @@ static void scenario_shorten(void){
         { 0.01f, degreesToRad(60.0f) },
         { 0.80f, degreesToRad(25.0f) },
     };
+
+    char path[256];
+    buildPath(path, "sim_shorten.csv");
     runScenario("Shorten: 60 deg -> 25 deg mid-motion",
-                events, 2, 4.0f, "sim_shorten.csv");
+                events, 2, 4.0f, path);
 }
 
 // Scenario 4: Reverse direction mid-motion (wandering case)
@@ -141,8 +157,11 @@ static void scenario_reverse(void){
         { 0.01f, degreesToRad(45.0f) },
         { 0.80f, degreesToRad(-20.0f) },
     };
+
+    char path[256];
+    buildPath(path, "sim_reverse.csv");
     runScenario("Reverse: 45 deg -> -20 deg mid-motion",
-                events, 2, 5.0f, "sim_reverse.csv");
+                events, 2, 5.0f, path);
 }
 
 // Scenario 5: Very short move (case d)
@@ -162,8 +181,11 @@ static void scenario_rapid(void){
         { 1.00f, degreesToRad(20.0f) },
         { 1.80f, degreesToRad(60.0f) },
     };
+    char path[256];
+    buildPath(path, "sim_rapid.csv");
+
     runScenario("Rapid changes: 30 -> 50 -> 20 -> 60 deg",
-                events, 4, 5.0f, "sim_rapid.csv");
+                events, 4, 5.0f, path );
 }
 
 /* *

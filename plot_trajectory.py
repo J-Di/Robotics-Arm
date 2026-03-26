@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import matplotlib.ticker as ticker
+from pathlib import Path
 
 # Phase color map — matches the 7-phase S-curve
 PHASE_COLORS = {
@@ -43,6 +44,29 @@ PHASE_LABELS = {
 }
 
 RAD2DEG = 180.0 / np.pi
+
+
+
+DATA_DIR = Path("./test")
+
+def resolve_paths(input_paths):
+    resolved = []
+
+    for p in input_paths:
+        path = Path(p)
+
+        # Case 1: exact path exists
+        if path.exists():
+            resolved.append(str(path))
+            continue
+
+        # Case 2: try inside ./test/
+        test_path = DATA_DIR / p
+        if test_path.exists():
+            resolved.append(str(test_path))
+            continue
+
+    return resolved
 
 
 def load_csv(path):
@@ -138,7 +162,7 @@ def plot_single(path):
 
     plt.tight_layout(rect=[0, 0.06, 1, 0.96])
 
-    outpath = name + '.png'
+    outpath = DATA_DIR / f"{name}.png"
     fig.savefig(outpath, dpi=150, bbox_inches='tight')
     print(f'  Saved: {outpath}')
     return fig
@@ -190,10 +214,9 @@ def main():
         print("       python3 plot_trajectory.py *.csv")
         sys.exit(1)
 
-    paths = sys.argv[1:]
+    paths = resolve_paths(sys.argv[1:])
+    paths = [p for p in paths if p.endswith('.csv')]
 
-    # Filter to only existing CSV files
-    paths = [p for p in paths if os.path.isfile(p) and p.endswith('.csv')]
     if not paths:
         print("No valid CSV files found.")
         sys.exit(1)
