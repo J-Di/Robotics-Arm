@@ -4,14 +4,14 @@
 #include <math.h>         
 
 // Variable Declarations
+// Variable Declarations
 volatile PosCtrlHandle *paths_planned[2];   // path plans from planner.c
 volatile uint8_t active_plan;              // active plan by planner.c
 volatile uint8_t inactive_plan;            // inactive plan by planner.c
 volatile VelocityFilter *motorTracker;
-float_t trajTime = 0.0f;                   // overall time of current ramp
 volatile bool plan_ready = false;          // flag for ISR to know a new plan is waiting
+float_t trajTime = 0.0f;                   // overall time of current ramp
 static float_t targetSetpoint = 0.0f;      // stored target for wandering replans
-
 //Function prototypes:
 
 
@@ -26,7 +26,6 @@ extern void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *PHandle
 // Internal helper prototypes (not exposed in header)
 static float_t computeDecelDistance(float_t v, float_t a_max, float_t j_max);
 static float_t computeAccelDistance(float_t v0, float_t v_target, float_t a_max, float_t j_max);
-
 
 /* 
 This function is called once at the start of the code, and it is used to setup the planner for the current ESC. 
