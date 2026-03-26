@@ -1,50 +1,43 @@
-# === Project Settings =========================================================
-TARGET := sim
+# S-Curve Trajectory Planner — Simulation Makefile
+CC      = gcc
+CFLAGS  = -Wall -Wextra -g -Ilib
+LDFLAGS = -lm
 
-# Directory layout
-SRCDIR := src
-INCDIR := lib
-OBJDIR := build
+SRC_DIR   = src
+BUILD_DIR = build
+TARGET    = sim
 
+SRCS = $(SRC_DIR)/main.c \
+       $(SRC_DIR)/SCurveTrajectory.c \
+       $(SRC_DIR)/planner.c
 
-# Automatically find all .c files in /src
-SRC := $(wildcard $(SRCDIR)/*.c)
-OBJ := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRC))
+OBJS = $(BUILD_DIR)/main.o \
+       $(BUILD_DIR)/SCurveTrajectory.o \
+       $(BUILD_DIR)/planner.o
 
-# Compiler / flags
-CC      := gcc
-CFLAGS = -Wall -Wextra -g -Ilib
-LDFLAGS := -lm
+# Default: build the simulator
+all: $(BUILD_DIR) $(TARGET)
 
-# === Rules ====================================================================
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-.PHONY: all clean run
+$(TARGET): $(OBJS)
+	@echo "  [LINK]  $(TARGET)"
+	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
-all: $(TARGET)
-
-# Link
-$(TARGET): $(OBJ)
-	@echo "  [LINK]  $@"
-	$(CC) $(OBJ) -o $@ $(LDFLAGS)
-
-# Compile each .c file
-$(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@echo "  [CC]    $<"
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Ensure build folder exists
-$(OBJDIR):
-	@mkdir -p $(OBJDIR)
-
-# Clean build outputs
 clean:
-	@echo "  [CLEAN]"
-	rm -rf $(OBJDIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) sim_*.csv sim_*.png
 
-# Run the simulation (after build)
-run: all
-	./$(TARGET)
+# Run all built-in scenarios
+run: $(TARGET)
+	./$(TARGET) <<< "0"
 
-# Convenience
-print-%:
-	@echo '$*=$($*)'
+# Plot all generated CSVs
+plot:
+	python3 plot_trajectory.py sim_*.csv
+
+.PHONY: all clean run plot

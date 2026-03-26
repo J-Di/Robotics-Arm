@@ -4,14 +4,14 @@
 #include <math.h>         
 
 // Variable Declarations
-// Variable Declarations
 volatile PosCtrlHandle *paths_planned[2];   // path plans from planner.c
 volatile uint8_t active_plan;              // active plan by planner.c
 volatile uint8_t inactive_plan;            // inactive plan by planner.c
 volatile VelocityFilter *motorTracker;
-volatile bool plan_ready = false;          // flag for ISR to know a new plan is waiting
 float_t trajTime = 0.0f;                   // overall time of current ramp
+volatile bool plan_ready = false;          // flag for ISR to know a new plan is waiting
 static float_t targetSetpoint = 0.0f;      // stored target for wandering replans
+
 //Function prototypes:
 
 
@@ -25,7 +25,7 @@ extern void updateVelocityFilter(VelocityFilter *pHandle, PosCtrlHandle *PHandle
 
 // Internal helper prototypes (not exposed in header)
 static float_t computeDecelDistance(float_t v, float_t a_max, float_t j_max);
-static float_t computeAccelDistance(float_t v0, float_t v_target, float_t a_max, float_t j_max);
+
 
 /* 
 This function is called once at the start of the code, and it is used to setup the planner for the current ESC. 
@@ -56,7 +56,7 @@ newly prepared one.
 */
 void buildNewCurve(float newSetpoint){
 
-    PosCtrlHandle *currPlan = paths_planned[active_plan];
+    PosCtrlHandle *currPlan = (PosCtrlHandle *)paths_planned[active_plan];
 
     // local function vars
     float_t newInitialVel;
@@ -80,7 +80,9 @@ void buildNewCurve(float newSetpoint){
 
     // Store the target so wandering replan can replace
     targetSetpoint = newSetpoint;
-    calculateNewRamp(paths_planned[inactive_plan], motorTracker, newInitialPos, newInitialVel, newSetpoint);
+    calculateNewRamp((PosCtrlHandle *)paths_planned[inactive_plan], 
+                     (VelocityFilter *)motorTracker, 
+                     newInitialPos, newInitialVel, newSetpoint);
 }
 
 /*
@@ -618,67 +620,98 @@ void PosCtrl_ISRStep(void){
         return;
     }
 
-    // Advance time
-    trajTime += SAMPLING_TIME;
+    VelocityFilter *tracker = (VelocityFilter *)motorTracker;
+    float_t t_start = trajTime;
+    float_t t_final = plan->profileSwitchingTimes[7];
 
-    //  Determine current phase from switching times
-    uint8_t phase = 7;  // default to last phase
-    if      (trajTime <= plan->profileSwitchingTimes[1]) phase = 1;
-    else if (trajTime <= plan->profileSwitchingTimes[2]) phase = 2;
-    else if (trajTime <= plan->profileSwitchingTimes[3]) phase = 3;
-    else if (trajTime <= plan->profileSwitchingTimes[4]) phase = 4;
-    else if (trajTime <= plan->profileSwitchingTimes[5]) phase = 5;
-    else if (trajTime <= plan->profileSwitchingTimes[6]) phase = 6;
-    else if (trajTime <= plan->profileSwitchingTimes[7]) phase = 7;
-    else {
-        // Past the end of trajectory
+    if (t_start >= t_final){
         plan->isTrajExecuting = false;
         plan->profilePhase = 0;
+        tracker->omega = 0.0f;
+        tracker->accel = 0.0f;
+        tracker->jerk  = 0.0f;
 
-        // If this was a wandering (stop-then-reverse) trajectory,
-        // replan from current stopped position to the actual target
         if (plan->isWandering){
             plan->isWandering = false;
-            // Replan: the motor should now be approximately at rest
             buildNewCurve(targetSetpoint);
         }
         return;
     }
 
-    plan->profilePhase = phase;
+    // Execute one ISR tick, but split it at any internal switching boundaries
+    // crossed within the tick so each sub-interval uses the correct constant jerk.
+    float_t t_tick_end = t_start + SAMPLING_TIME;
+    if (t_tick_end > t_final){
+        t_tick_end = t_final;
+    }
 
-    // Select jerk and integrate ----
-    float_t j = selectJerk(phase, plan->j_max);
+    float_t t_curr = t_start;
+    float_t s_curr = plan->theta;
+    float_t v_curr = tracker->omega;
+    float_t a_curr = tracker->accel;
+    uint8_t lastPhase = 0;
+    float_t lastJerk = 0.0f;
 
-    // Apply direction: the jerk sign pattern assumes motion in the positive direction
-    // If we're moving in the negative direction, flip the jerk.
-    j *= (float_t)plan->dir;
+    while (t_curr < t_tick_end){
+        uint8_t phase = 7;
+        if      (t_curr < plan->profileSwitchingTimes[1]) phase = 1;
+        else if (t_curr < plan->profileSwitchingTimes[2]) phase = 2;
+        else if (t_curr < plan->profileSwitchingTimes[3]) phase = 3;
+        else if (t_curr < plan->profileSwitchingTimes[4]) phase = 4;
+        else if (t_curr < plan->profileSwitchingTimes[5]) phase = 5;
+        else if (t_curr < plan->profileSwitchingTimes[6]) phase = 6;
+        else                                              phase = 7;
 
-    // Get current state from the velocity filter
-    VelocityFilter *tracker = (VelocityFilter *)motorTracker;
-    float_t a_prev = tracker->accel;
-    float_t v_prev = tracker->omega;
-    float_t s_prev = plan->theta;    // using the planned position for simulation 
+        float_t t_boundary = plan->profileSwitchingTimes[phase];
+        float_t t_next = (t_boundary < t_tick_end) ? t_boundary : t_tick_end;
 
-    float_t Ts = SAMPLING_TIME;
+        // Guard against zero-length sub-steps from equal switching times.
+        if (t_next <= t_curr){
+            t_curr = t_tick_end;
+            break;
+        }
 
-    // Euler integration of kinematic model (paper eqs 6-8)
-    float_t a_new = a_prev + j * Ts;
-    float_t v_new = v_prev + a_prev * Ts + 0.5f * j * Ts * Ts;
-    float_t s_new = s_prev + v_prev * Ts + 0.5f * a_prev * Ts * Ts + (1.0f / 6.0f) * j * Ts * Ts * Ts;
+        float_t dt = t_next - t_curr;
+        float_t j = selectJerk(phase, plan->j_max) * (float_t)plan->dir;
 
-    // Store the computed state (in simulation mode, these ARE the motor state)
-    plan->theta = s_new;
-    tracker->accel = a_new;
-    // omega and theta are updated by updateVelocityFilter below, but we also
-    // feed our integrated values so the filter has consistent state in simulation.
-    tracker->omega = v_new;
+        // Exact integration of constant-jerk kinematics over this sub-step.
+        s_curr = s_curr + v_curr * dt + 0.5f * a_curr * dt * dt + (1.0f / 6.0f) * j * dt * dt * dt;
+        v_curr = v_curr + a_curr * dt + 0.5f * j * dt * dt;
+        a_curr = a_curr + j * dt;
 
-    // Update velocity filter with actual reading ----
-    // In real firmware, this reads the encoder. In simulation, it reads plan->theta.
-    updateVelocityFilter(tracker, plan);
+        t_curr = t_next;
+        lastPhase = phase;
+        lastJerk = j;
+    }
 
-    // Step 6: Command the motor ----
-    // TODO: Write s_new (or the velocity/position command) to the motor driver
-    // On the real ESC this would feed into the FOC position/velocity loop.
+    trajTime = t_tick_end;
+
+    // Store the computed state — in simulation, the integrator IS the motor.
+    plan->theta = s_curr;
+    plan->profilePhase = lastPhase;
+    tracker->theta_prev = tracker->theta;
+    tracker->omega_prev = tracker->omega;
+    tracker->accel_prev = tracker->accel;
+    tracker->theta = s_curr;
+    tracker->omega = v_curr;
+    tracker->accel = a_curr;
+    tracker->jerk  = lastJerk;
+
+    // If the tick landed exactly on the end of the ramp, finish cleanly.
+    if (trajTime >= t_final){
+        plan->isTrajExecuting = false;
+        plan->profilePhase = 0;
+        tracker->omega = 0.0f;
+        tracker->accel = 0.0f;
+        tracker->jerk  = 0.0f;
+
+        if (plan->isWandering){
+            plan->isWandering = false;
+            buildNewCurve(targetSetpoint);
+        }
+    }
+
+    // NOTE: On real hardware, replace the above with:
+    //   plan->theta = s_curr;                   // commanded position
+    //   updateVelocityFilter(tracker, plan);   // reads encoder, computes derivatives
 }
