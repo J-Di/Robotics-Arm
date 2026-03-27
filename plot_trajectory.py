@@ -217,11 +217,14 @@ def main():
     paths = resolve_paths(sys.argv[1:])
     paths = [p for p in paths if p.endswith('.csv')]
 
+    # Skip velocity control files — only plot S-curve sim CSVs
+    paths = [p for p in paths if not os.path.basename(p).startswith('vel_')]
+
     if not paths:
         print("No valid CSV files found.")
         sys.exit(1)
 
-    print(f"Plotting {len(paths)} file(s)...\n")
+    print(f"Plotting {len(paths)} file(s)\n")
 
     # Plot each individually
     for path in paths:
