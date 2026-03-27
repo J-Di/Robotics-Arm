@@ -10,7 +10,7 @@ volatile uint8_t inactive_plan;            // inactive plan by planner.c
 volatile VelocityFilter *motorTracker;
 float_t trajTime = 0.0f;                   // overall time of current ramp
 volatile bool plan_ready = false;          // flag for ISR to know a new plan is waiting
-static float_t targetSetpoint = 0.0f;      // stored target for wandering replans
+float_t targetSetpoint = 0.0f;      // stored target for wandering/forced-braking replans
 
 //Function prototypes:
 
@@ -57,29 +57,28 @@ newly prepared one.
 void buildNewCurve(float newSetpoint){
 
     PosCtrlHandle *currPlan = (PosCtrlHandle *)paths_planned[active_plan];
+    VelocityFilter *tracker = (VelocityFilter *)motorTracker;
 
-    // local function vars
-    float_t newInitialVel;
-    float_t newInitialPos;
+    // Store the target so wandering or forced-braking replan can replace
+    targetSetpoint = newSetpoint;
 
-    // Update initial conditions based on whether a ramp is currently executing
-    if (currPlan->isTrajExecuting){
-        virtualHistory virtualInitialCond = calculateVirtualHistory(currPlan, (VelocityFilter *)motorTracker);
-        newInitialVel = virtualInitialCond.virt_v0;
-        newInitialPos = virtualInitialCond.virt_s0;
-    }
-    else{
-        newInitialVel = motorTracker->omega;
-        newInitialPos = motorTracker->theta;
-    }
-
-    // If too dast, must wait for forced -J_MAX decek to resolve before replanning
-    if (currPlan->isPastTooFast){ // if too fast, must recalculate on next iteration, forced -J_MAX
+    // If the motor currently has significant acceleration, the virtual history
+    // approach produces a trajectory that assumes a=0 at start — but the ISR
+    // would integrate from the actual (nonzero) acceleration, causing mismatch.
+    // Instead, defer replanning: let the ISR drive acceleration to zero first,
+    // then the main loop replans from the clean constant-velocity state.
+    float_t accelThreshold = currPlan->j_max * SAMPLING_TIME;
+    if (currPlan->isTrajExecuting && fabsf(tracker->accel) > accelThreshold){
+        currPlan->tooFastPending = true;
         return;
     }
 
-    // Store the target so wandering replan can replace
-    targetSetpoint = newSetpoint;
+    // At this point either (a) no trajectory is executing, or
+    // (b) a trajectory is executing but acceleration is ~0 (phase IV / constant velocity).
+    // In both cases, the motor state has a ≈ 0 so we can plan directly.
+    float_t newInitialVel = tracker->omega;
+    float_t newInitialPos = tracker->theta;
+
     calculateNewRamp((PosCtrlHandle *)paths_planned[inactive_plan], 
                      (VelocityFilter *)motorTracker, 
                      newInitialPos, newInitialVel, newSetpoint);
@@ -211,10 +210,13 @@ switchingTimes determineSwitchingTimes(float_t targetPos, float_t s0, float_t v0
     float_t v0n  = dir * v0;                    // velocity component toward target (+ = toward)
     float_t sEn  = dir * (targetPos - s0);      // distance to target (>= 0)
 
-    // Moving AWAY from target: brake to stop, then replan
+    // Moving AWAY from target: brake to stop, then replan.
+    // Use actual motor velocity for the braking profile, not the virtual v0,
+    // because the braking trajectory must match the motor's real kinetic state.
     if (v0n < 0.0f) {
         currTrajCutoff.isWandering = true;
-        return decellerate2Stop(targetPos, s0, v0, currentMotionPlan, motorTracker);
+        float_t actualVel = motorTracker->omega;
+        return decellerate2Stop(targetPos, s0, actualVel, currentMotionPlan, motorTracker);
     }
 
     // Useful threshold: velocity at which a_max is just reached during a jerk ramp
@@ -230,9 +232,11 @@ switchingTimes determineSwitchingTimes(float_t targetPos, float_t s0, float_t v0
     float_t deltaSmin = computeDecelDistance(v0n, a_max, j_max);
 
     if (sEn < deltaSmin) {
-        // Can't stop before target, must overshoot then come back (wander)
+        // Can't stop before target, must overshoot then come back (wander).
+        // Use actual motor velocity for braking profile.
         currTrajCutoff.isWandering = true;
-        return decellerate2Stop(targetPos, s0, v0, currentMotionPlan, motorTracker);
+        float_t actualVel = motorTracker->omega;
+        return decellerate2Stop(targetPos, s0, actualVel, currentMotionPlan, motorTracker);
     }
 
     // From here: v0n >= 0 and we have enough distance. Classify into cases c, b, a, d.
@@ -563,8 +567,18 @@ void calculateNewRamp(PosCtrlHandle *newPlan, VelocityFilter *motorTracker, floa
     // Compute the switching times for this move
     switchingTimes times = determineSwitchingTimes(targetPos, s0, v0, newPlan, motorTracker);
 
-    // Direction of motion
-    float_t dir = (targetPos - s0 >= 0.0f) ? 1.0f : -1.0f;
+    // Direction of motion.
+    // For normal trajectories: direction is toward the target.
+    // For wandering (braking) profiles: direction must be the direction of
+    // current velocity, so the decel phases (5-7) produce jerk that opposes
+    // the motor's motion and brings it to a stop.
+    float_t dir;
+    if (times.isWandering){
+        // Use actual motor velocity direction for braking
+        dir = (motorTracker->omega >= 0.0f) ? 1.0f : -1.0f;
+    } else {
+        dir = (targetPos - s0 >= 0.0f) ? 1.0f : -1.0f;
+    }
 
     // Populate the plan's switching times array [t0, t1, ... t7]
     newPlan->profileSwitchingTimes[0] = times.t0;
@@ -581,8 +595,14 @@ void calculateNewRamp(PosCtrlHandle *newPlan, VelocityFilter *motorTracker, floa
     newPlan->isWandering = times.isWandering;
     newPlan->isTrajExecuting = true;
     newPlan->isPastTooFast = false;
+    newPlan->tooFastPending = false;
+    newPlan->wanderReplanPending = false;
     newPlan->profilePhase = 0;   // will be set to 1 on first ISR step
-    newPlan->theta = s0;         // starting position for simulation mode
+
+    // Use the actual motor position as the starting point for the ISR.
+    // The virtual s0 was only needed for switching time computation.
+    // Using virtual s0 here would cause a position discontinuity.
+    newPlan->theta = motorTracker->theta;
 
     // Signal the ISR that a new plan is ready to swap in
     plan_ready = true;
@@ -597,11 +617,12 @@ void calculateNewRamp(PosCtrlHandle *newPlan, VelocityFilter *motorTracker, floa
      3. Select jerk for this phase
      4. Integrate jerk -> accel -> velocity -> position
      5. Update the velocity filter with the actual encoder reading
-     6. Detect completion (or wandering replan)
+     6. Raise any replan flags for the main loop
 */
 void PosCtrl_ISRStep(void){
 
     PosCtrlHandle *plan = (PosCtrlHandle *)paths_planned[active_plan];
+    VelocityFilter *tracker = (VelocityFilter *)motorTracker;
 
     // Swap plans if a new one is waiting
     if (plan_ready){
@@ -620,10 +641,61 @@ void PosCtrl_ISRStep(void){
         return;
     }
 
-    VelocityFilter *tracker = (VelocityFilter *)motorTracker;
     float_t t_start = trajTime;
     float_t t_final = plan->profileSwitchingTimes[7];
 
+    // "Too fast" correction per paper Section 4, cases v/vi/vii:
+    // Apply jerk to drive acceleration toward zero. Once |a| is small enough,
+    // the main loop will detect this and replan from the current (v, s) with a≈0.
+    // This MUST be checked before the t_final completion check, because we are
+    // overriding the original trajectory — the original switching times are stale.
+    if (plan->tooFastPending){
+
+        float_t dt = SAMPLING_TIME;
+        float_t s_curr = plan->theta;
+        float_t v_curr = tracker->omega;
+        float_t a_curr = tracker->accel;
+        float_t j = 0.0f;
+
+        // Apply jerk to reduce |acceleration| toward zero
+        if (a_curr < -0.5f * plan->j_max * dt){
+            // Negative acceleration: apply positive jerk to bring it up toward 0
+            j = plan->j_max;
+            plan->profilePhase = 7;
+        }
+        else if (a_curr > 0.5f * plan->j_max * dt){
+            // Positive acceleration: apply negative jerk to bring it down toward 0
+            j = -plan->j_max;
+            plan->profilePhase = 3;
+        }
+        else{
+            // Acceleration is essentially zero — snap to zero and let main loop replan
+            j = 0.0f;
+            a_curr = 0.0f;
+            plan->profilePhase = 4;
+            // Clear the too-fast state so main loop can replan
+            plan->isPastTooFast = false;
+        }
+
+        // Exact integration of constant-jerk kinematics
+        s_curr = s_curr + v_curr * dt + 0.5f * a_curr * dt * dt + (1.0f / 6.0f) * j * dt * dt * dt;
+        v_curr = v_curr + a_curr * dt + 0.5f * j * dt * dt;
+        a_curr = a_curr + j * dt;
+
+        plan->theta = s_curr;
+        tracker->theta_prev = tracker->theta;
+        tracker->omega_prev = tracker->omega;
+        tracker->accel_prev = tracker->accel;
+        tracker->theta = s_curr;
+        tracker->omega = v_curr;
+        tracker->accel = a_curr;
+        tracker->jerk  = j;
+
+        trajTime += dt;
+        return;
+    }
+
+    // If the active plan is complete, stop cleanly and raise any main-loop work flags.
     if (t_start >= t_final){
         plan->isTrajExecuting = false;
         plan->profilePhase = 0;
@@ -633,7 +705,7 @@ void PosCtrl_ISRStep(void){
 
         if (plan->isWandering){
             plan->isWandering = false;
-            buildNewCurve(targetSetpoint);
+            plan->wanderReplanPending = true;
         }
         return;
     }
@@ -707,7 +779,7 @@ void PosCtrl_ISRStep(void){
 
         if (plan->isWandering){
             plan->isWandering = false;
-            buildNewCurve(targetSetpoint);
+            plan->wanderReplanPending = true;
         }
     }
 

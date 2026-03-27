@@ -5,6 +5,9 @@
 #include "planner.h"
 #include "SCurveTrajectory.h"
 
+// Declared in planner.c — the stored target for forced-braking replans
+extern float_t targetSetpoint;
+
 // Define a path for the tests
 
 char * PATH = "./test/";
@@ -54,6 +57,50 @@ static void logRow(float time_s, float setpoint){
 }
 
 /* *
+   Planner foreground step — this simulates the non-ISR main loop work.
+
+   Responsibilities:
+   1. Handle a newly requested setpoint
+   2. Handle deferred wandering replans
+   3. Handle deferred too-fast replans
+
+   The ISR should stay focused on executing the active motion profile.
+   * */
+static void Planner_MainStep(bool *newCommandPending, float requestedSetpoint){
+
+    PosCtrlHandle *activePlan = (PosCtrlHandle *)paths_planned[active_plan];
+
+    // 1) A new command arrived — try to build the new curve in foreground context
+    if (*newCommandPending){
+        *newCommandPending = false;
+        buildNewCurve(requestedSetpoint);
+        return;
+    }
+
+    // 2) A wandering stop completed in the ISR, so foreground code now creates the follow-up ramp
+    if (activePlan->wanderReplanPending){
+        activePlan->wanderReplanPending = false;
+        buildNewCurve(requestedSetpoint);
+        return;
+    }
+
+    // 3) The ISR is running forced braking to bring acceleration to zero.
+    // Once |a| is small enough, replan from the current motor state.
+    if (activePlan->tooFastPending){
+        VelocityFilter *tracker = (VelocityFilter *)motorTracker;
+        float_t accelThreshold = activePlan->j_max * SAMPLING_TIME;
+        if (fabsf(tracker->accel) <= accelThreshold){
+            activePlan->tooFastPending = false;
+            // Motor is now at approximately constant velocity (a ≈ 0).
+            // Replan directly from actual motor state.
+            calculateNewRamp((PosCtrlHandle *)paths_planned[inactive_plan],
+                             (VelocityFilter *)motorTracker,
+                             tracker->theta, tracker->omega, targetSetpoint);
+        }
+    }
+}
+
+/* *
    Run one simulation scenario
    * */
 static void runScenario(const char *name,  SetpointEvent *events, int numEvents, float duration_s, const char *csvPath){
@@ -83,6 +130,7 @@ static void runScenario(const char *name,  SetpointEvent *events, int numEvents,
     int totalTicks = (int)(duration_s / SAMPLING_TIME);
     int nextEvent  = 0;
     float currentSetpoint = 0.0f;
+    bool newCommandPendingLocal = false;
 
     for (int tick = 0; tick < totalTicks; tick++){
         float t = tick * SAMPLING_TIME;
@@ -92,9 +140,15 @@ static void runScenario(const char *name,  SetpointEvent *events, int numEvents,
             currentSetpoint = events[nextEvent].setpoint;
             printf("  t=%.3f s -> setpoint = %.4f rad (%.2f deg)\n",
                    t, currentSetpoint, radToDegrees(currentSetpoint));
-            buildNewCurve(currentSetpoint);
+
+            // In the new architecture, the event only queues the request.
+            // Foreground logic below decides when to call buildNewCurve().
+            newCommandPendingLocal = true;
             nextEvent++;
         }
+
+        // Run one foreground/main-loop service step
+        Planner_MainStep(&newCommandPendingLocal, currentSetpoint);
 
         // Run one ISR tick
         PosCtrl_ISRStep();
@@ -138,11 +192,11 @@ static void scenario_extend(void){
                 events, 2, 4.0f, path);
 }
 
-// Scenario 3: Mid-motion setpoint change — same direction, closer
+// Scenario 3: Mid-motion setpoint change , while coasting --> Shoudl coast longer
 static void scenario_shorten(void){
     SetpointEvent events[] = {
         { 0.01f, degreesToRad(60.0f) },
-        { 0.80f, degreesToRad(25.0f) },
+        { 0.50f, degreesToRad(25.0f) },
     };
 
     char path[256];
@@ -169,8 +223,11 @@ static void scenario_short(void){
     SetpointEvent events[] = {
         { 0.01f, degreesToRad(0.5f) }
     };
+    char path[256];
+    buildPath(path, "sim_short.csv");
+
     runScenario("Short move: 0 -> 0.5 deg",
-                events, 1, 2.0f, "sim_short.csv");
+                events, 1, 2.0f, path);
 }
 
 // Scenario 6: Multiple rapid setpoint changes

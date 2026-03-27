@@ -30,8 +30,10 @@ PosCtrlHandle* STrajectoryInit(float_t currentPos){
 
     pHandle->profilePhase   = 0;
     pHandle->isTrajExecuting = false;
+    pHandle->tooFastPending = false;
     pHandle->isWandering    = false;
     pHandle->isPastTooFast  = false;
+    pHandle->wanderReplanPending = false;
     pHandle->dir            = 0;     // idle
     pHandle->theta          = currentPos;
 

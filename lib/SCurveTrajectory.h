@@ -35,6 +35,8 @@ typedef struct posCtrlHandle {
     uint8_t profilePhase;             // Current phase: 1-7 (0 = idle)
 
     bool isTrajExecuting;  // True while a trajectory is being followed
+    bool tooFastPending;    // Indicates if a replan is required for past to fast
+    bool wanderReplanPending; // indicates if a replan is required because is wandering
     bool isWandering;      // True if motor must stop then reverse to reach setpoint
     bool isPastTooFast;    // True if virtual v0 > vc during decel-phase target change
 
