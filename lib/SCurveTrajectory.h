@@ -15,9 +15,9 @@
    Motor / trajectory constraint parameters
    TODO: Determine actual values from motor characterization
 */
-#define A_MAX       100.0f   // Max acceleration [rad/s^2]
-#define J_MAX       20.0f    // Max jerk [rad/s^3]
-#define MAX_VEL     1.4f     // Absolute max velocity [rad/s] (~80 deg/s)
+#define A_MAX       50.0f   // Max acceleration [rad/s^2] og 80
+#define J_MAX       10.0f    // Max jerk [rad/s^3] og 20
+#define MAX_VEL     1.0f     // Absolute max velocity [rad/s] (~60 deg/s)
 
 /* Sampling and filter parameters */
 #define SAMPLING_TIME           0.001f  // ISR period [s] (1 kHz)

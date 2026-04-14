@@ -56,8 +56,7 @@ $(BUILD_DIR)/SCurveTrajectory_vel.o: $(SRC_DIR)/SCurveTrajectory.c
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(VEL_TARGET) \
 		sim_*.csv sim_*.png \
-		$(TEST_DIR)/sim_*.csv $(TEST_DIR)/sim_*.png \
-		$(TEST_DIR)/vel_*.csv $(TEST_DIR)/vel_*.png
+		$(TEST_DIR)/sim_*.csv $(TEST_DIR)/sim_*.png 
 
 # Run all built-in S-curve scenarios
 run: $(TARGET)

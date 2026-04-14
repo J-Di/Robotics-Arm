@@ -169,7 +169,7 @@ static void runScenario(const char *name,  SetpointEvent *events, int numEvents,
 // Scenario 1: Simple point-to-point from rest
 static void scenario_simple(void){
     SetpointEvent events[] = {
-        { 0.01f, degreesToRad(45.0f) }
+        { 0.01f, degreesToRad(90.0f) }
     };
     
     char path[256];

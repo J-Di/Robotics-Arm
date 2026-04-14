@@ -110,16 +110,38 @@ static float_t computeBrakingVelocity(float_t v, float_t a, float_t j_max){
 
 /*  Public API                                                         */
 
+// // This is for testing
+//VelCtrlHandle* velCtrlInit(float_t currentPos){
+//
+//    VelCtrlHandle *h = malloc(sizeof(VelCtrlHandle));
+//    if (!h) return NULL;
+//
+//    h->a_max = A_MAX;
+//    h->v_max = MAX_VEL;   /* Use the absolute ceiling; can be overridden */
+//    h->j_max = J_MAX;
+//    h->Ts    = SAMPLING_TIME;
+//
+//    h->cmd_vel   = 0.0f;
+//    h->cmd_accel = 0.0f;
+//    h->cmd_pos   = currentPos;
+//
+//    h->demanded_vel = 0.0f;
+//
+//    h->pos_min       = 0.0f;
+//    h->pos_max       = 0.0f;
+//    h->pos_limits_en = false;
+//
+//    h->is_active = false;
+//
+//    return h;
+//}
 
-VelCtrlHandle* velCtrlInit(float_t currentPos){
-
-    VelCtrlHandle *h = malloc(sizeof(VelCtrlHandle));
-    if (!h) return NULL;
+void velCtrlInitStatic(VelCtrlHandle *h, float_t currentPos){
 
     h->a_max = A_MAX;
-    h->v_max = MAX_VEL;   /* Use the absolute ceiling; can be overridden */
+    h->v_max = MAX_VEL;
     h->j_max = J_MAX;
-    h->Ts    = SAMPLING_TIME;
+    h->Ts    = SAMPLING_TIME_PLANNER;
 
     h->cmd_vel   = 0.0f;
     h->cmd_accel = 0.0f;
@@ -132,10 +154,7 @@ VelCtrlHandle* velCtrlInit(float_t currentPos){
     h->pos_limits_en = false;
 
     h->is_active = false;
-
-    return h;
 }
-
 
 void velCtrlSetDemand(VelCtrlHandle *h, float_t demandedVel){
 
@@ -195,11 +214,11 @@ float_t velCtrl_ISRStep(VelCtrlHandle *h, VelocityFilter *tracker){
     float_t a = h->cmd_accel;
     float_t demand = h->demanded_vel;
 
-    
+
     /*  Position limit override                                      */
     /*  If approaching a limit, override demand to zero and force    */
     /*  deceleration before hitting the wall.                        */
-    
+
     if (h->pos_limits_en){
         float_t pos = h->cmd_pos;
 
@@ -227,7 +246,7 @@ float_t velCtrl_ISRStep(VelCtrlHandle *h, VelocityFilter *tracker){
         if (pos <= h->pos_min && demand < 0.0f) demand = 0.0f;
     }
 
-    
+
     /*  Jerk decision                                                */
     /*                                                               */
     /*  Velocity error: how far the current velocity is from demand. */
@@ -238,7 +257,7 @@ float_t velCtrl_ISRStep(VelCtrlHandle *h, VelocityFilter *tracker){
     /*   - If braking velocity would overshoot demand → brake        */
     /*   - Else if we're below demand → accelerate toward it         */
     /*   - Else → coast (bleed off residual accel)                   */
-    
+
 
     float_t v_error = demand - v;
     float_t j = 0.0f;
@@ -326,9 +345,9 @@ float_t velCtrl_ISRStep(VelCtrlHandle *h, VelocityFilter *tracker){
         if (p_new < h->pos_min) p_new = h->pos_min;
     }
 
-    
+
     /*  Store state    */
-    
+
 
     h->cmd_vel   = v_new;
     h->cmd_accel = a_new;

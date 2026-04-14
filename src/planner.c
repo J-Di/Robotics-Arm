@@ -327,60 +327,6 @@ switchingTimes determineSwitchingTimes(float_t targetPos, float_t s0, float_t v0
             
             float_t T_j = a_max / j_max;   // jerk time for phases I, III, V, VII
             float_t v1 = v0n + 0.5f * a_max * T_j;  // velocity at end of phase I (eq 20)
-
-            // Δs_03 as function of v3:
-            //   dt2 = (v3 - v1) / a_max  (from phase II at constant a_max)
-            //   Δs_03 = v0n*T_j + (1/2)*j_max*T_j^3/... let's use the integral approach:
-            //   Δs1 = v0n*T_j + (1/6)*j_max*T_j^3  (phase I: jerk = +j_max, a starts at 0)
-            //        = v0n*T_j + (a_max^3)/(6*j_max^2)    ... since j_max*T_j^3 = j_max*(a_max/j_max)^3 = a_max^3/j_max^2
-            //   Actually, let me just use:
-            //     Δs1 = v0n*T_j + (1/2)*(a_max/2)*T_j^2  ... no, let me be more careful.
-            //
-            //   In phase I (duration T_j, jerk = j_max, a0 = 0):
-            //     a(t) = j_max * t
-            //     v(t) = v0n + (1/2)*j_max*t^2
-            //     s(t) = v0n*t + (1/6)*j_max*t^3
-            //   At t = T_j: 
-            //     Δs1 = v0n*T_j + (1/6)*j_max*T_j^3
-            //
-            //   In phase II (duration dt2, jerk = 0, a = a_max):
-            //     Δs2 = v1*dt2 + (1/2)*a_max*dt2^2
-            //     where dt2 = (v3 - v1)/a_max
-            //
-            //   In phase III (duration T_j, jerk = -j_max, a starts at a_max):
-            //     Δs3 = v2*T_j + (1/2)*a_max*T_j^2 - (1/6)*j_max*T_j^3
-            //     where v2 = v3 - (1/2)*j_max*T_j^2 = v3 - (1/2)*a_max*T_j
-            //     Actually v2 = v1 + a_max*dt2 - ... no. v2 is velocity at start of phase III.
-            //     v2 = v1 + a_max * dt2. Then phase III reduces accel from a_max to 0:
-            //     v3 = v2 + a_max*T_j - (1/2)*j_max*T_j^2 = v2 + a_max*T_j - (1/2)*a_max*T_j = v2 + (1/2)*a_max*T_j
-            //     So v2 = v3 - (1/2)*a_max*T_j  ✓
-            //     Δs3 = v2*T_j + (1/2)*a_max*T_j^2 - (1/6)*j_max*T_j^3
-            //
-            // Similarly for decel (Δs_47 as function of v3):
-            //     Symmetric to Δs_03 with v0n=0 and target velocity 0, starting from v3
-            //     Δs_47(v3) = computeDecelDistance(v3, a_max, j_max)
-            //
-            // Rather than expanding all this, use the shortcut from the paper:
-            //   sEn = Δs_03(v3) + Δs_47(v3)
-            //   where Δs_03(v3) = (v3/2) * ((v3 - 2*v0n)/a_max + a_max/j_max)   [generalized eq 15]
-            //   and   Δs_47(v3) = (v3/2) * (v3/a_max + a_max/j_max)             [eq 17 with v3 instead of v_max]
-            //
-            //   sEn = (v3/2)*((v3 - 2*v0n)/a_max + a_max/j_max) + (v3/2)*(v3/a_max + a_max/j_max)
-            //   sEn = (v3/2) * [(v3 - 2*v0n)/a_max + a_max/j_max + v3/a_max + a_max/j_max]
-            //   sEn = (v3/2) * [(2*v3 - 2*v0n)/a_max + 2*a_max/j_max]
-            //   sEn = v3 * [(v3 - v0n)/a_max + a_max/j_max]
-            //   sEn = v3^2/a_max - v3*v0n/a_max + v3*a_max/j_max
-            //
-            //   This is quadratic in v3:
-            //   (1/a_max) * v3^2 + (a_max/j_max - v0n/a_max) * v3 - sEn = 0
-            //   
-            //   v3 = [-B + sqrt(B^2 + 4*sEn/a_max)] / 2 * a_max / ... let me redo:
-            //   A = 1/a_max
-            //   B = a_max/j_max - v0n/a_max  
-            //   C = -sEn
-            //   v3 = (-B + sqrt(B^2 - 4*A*C)) / (2*A)
-            //      = (-B + sqrt(B^2 + 4*sEn/a_max)) / (2/a_max)
-            //      = (a_max/2) * (-B + sqrt(B^2 + 4*sEn/a_max))
             
             float_t A = 1.0f / a_max;
             float_t B = a_max / j_max - v0n / a_max;
@@ -758,7 +704,7 @@ void PosCtrl_ISRStep(void){
 
     trajTime = t_tick_end;
 
-    // Store the computed state — in simulation, the integrator IS the motor.
+    // Store the computed state in simulation, the integrator IS the motor.
     plan->theta = s_curr;
     plan->profilePhase = lastPhase;
     tracker->theta_prev = tracker->theta;
@@ -787,3 +733,47 @@ void PosCtrl_ISRStep(void){
     //   plan->theta = s_curr;                   // commanded position
     //   updateVelocityFilter(tracker, plan);   // reads encoder, computes derivatives
 }
+
+// This needs to be uncommented if on an MCU
+// /* *
+//    Planner foreground step 
+//    Responsibilities:
+//    1. Handle a newly requested setpoint
+//    2. Handle deferred wandering replans
+//    3. Handle deferred too-fast replans
+
+//    The ISR should stay focused on executing the active motion profile.
+//    * */
+// static void Planner_MainStep(bool *newCommandPending, float requestedSetpoint){
+
+//     PosCtrlHandle *activePlan = (PosCtrlHandle *)paths_planned[active_plan];
+
+//     // 1) A new command arrived — try to build the new curve in foreground context
+//     if (*newCommandPending){
+//         *newCommandPending = false;
+//         buildNewCurve(requestedSetpoint);
+//         return;
+//     }
+
+//     // 2) A wandering stop completed in the ISR, so foreground code now creates the follow-up ramp
+//     if (activePlan->wanderReplanPending){
+//         activePlan->wanderReplanPending = false;
+//         buildNewCurve(requestedSetpoint);
+//         return;
+//     }
+
+//     // 3) The ISR is running forced braking to bring acceleration to zero.
+//     // Once |a| is small enough, replan from the current motor state.
+//     if (activePlan->tooFastPending){
+//         VelocityFilter *tracker = (VelocityFilter *)motorTracker;
+//         float_t accelThreshold = activePlan->j_max * SAMPLING_TIME;
+//         if (fabsf(tracker->accel) <= accelThreshold){
+//             activePlan->tooFastPending = false;
+//             // Motor is now at approximately constant velocity (a ≈ 0).
+//             // Replan directly from actual motor state.
+//             calculateNewRamp((PosCtrlHandle *)paths_planned[inactive_plan],
+//                              (VelocityFilter *)motorTracker,
+//                              tracker->theta, tracker->omega, targetSetpoint);
+//         }
+//     }
+// }
